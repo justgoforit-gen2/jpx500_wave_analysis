@@ -176,7 +176,7 @@ def show_list_view():
     results = load_results()
     if results is None:
         st.error("分析結果がありません。先にバッチ更新を実行してください。")
-        st.code("cd jpx500_wave_analysis && .venv\\Scripts\\python.exe batch\\update.py")
+        st.code("cd jpx500_wave_analysis && python batch/update.py")
         return
 
     # --- サイドバー ---
@@ -918,6 +918,12 @@ def show_strategy_view():
 
     if stock_list_df is None or len(stock_list_df) == 0:
         st.error("銘柄リストがありません。先にバッチ更新を実行してください。")
+        return
+
+    # キャッシュデータの存在確認
+    if not CACHE_DIR.exists() or len(list(CACHE_DIR.glob("*.parquet"))) == 0:
+        st.warning("株価キャッシュデータがありません。バッチ更新を実行してください。")
+        st.code("cd jpx500_wave_analysis && python batch/update.py")
         return
 
     # キャッシュ付きランキング生成
