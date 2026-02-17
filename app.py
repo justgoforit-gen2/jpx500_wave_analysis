@@ -119,7 +119,20 @@ def get_data_dates() -> dict[str, str]:
         mtime = RESULTS_CSV.stat().st_mtime
         info["batch_run"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
-    # キャッシュparquetから実際の最新株価日付を取得（1ファイルだけサンプル）
+    latest_dates = []
+
+    # daily_picks.csv の date 列はバッチが生成するため、Cloudでも追随しやすい
+    if DAILY_PICKS_CSV.exists():
+        try:
+            picks = pd.read_csv(DAILY_PICKS_CSV, encoding="utf-8-sig", dtype={"code": str})
+            if "date" in picks.columns and len(picks) > 0:
+                d = pd.to_datetime(picks["date"], errors="coerce").max()
+                if pd.notna(d):
+                    latest_dates.append(pd.Timestamp(d))
+        except Exception:
+            pass
+
+    # キャッシュparquetから実際の最新株価日付を取得
     if CACHE_DIR.exists():
         parquets = list(CACHE_DIR.glob("*.parquet"))
         if parquets:
@@ -129,9 +142,14 @@ def get_data_dates() -> dict[str, str]:
                 newest = max(parquets, key=lambda p: p.stat().st_mtime)
                 sample = pd.read_parquet(newest)
                 sample.index = pd.to_datetime(sample.index)
-                info["latest_data"] = sample.index.max().strftime("%Y-%m-%d")
+                d = sample.index.max()
+                if pd.notna(d):
+                    latest_dates.append(pd.Timestamp(d))
             except Exception:
                 pass
+
+    if latest_dates:
+        info["latest_data"] = max(latest_dates).strftime("%Y-%m-%d")
     return info
 
 
