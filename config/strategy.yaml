@@ -1,0 +1,217 @@
+# strategy.yaml
+# =============================================================================
+# 目的：
+# (1) ABCD（A/B/C/D）の過去成績を評価し、今日の推奨銘柄を（補正込みで）ランキング出力
+# (2) ベンチマーク（日経225 Buy&Hold）と、ABCD戦略のリスク×リターンを相対比較
+# =============================================================================
+
+meta:
+  timezone: Asia/Tokyo
+  bar: 1d
+  currency: JPY
+
+data:
+  source: yahoo_finance
+  price_fields: [open, high, low, close, volume]
+
+# ---------------------------------------------------------------------------
+# ユニバース: 基礎集合（JPX500/プライム全体）∩ 流動性フィルタ
+# ---------------------------------------------------------------------------
+universe:
+  update_frequency: weekly
+  base_list: jpx500              # 既存の jpx500_list.csv を基礎集合として使用
+  instruments:
+    stocks:
+      market: TSE_Prime
+      liquidity_filter:
+        avg_turnover_20d_min_jpy: 200000000   # 2億円
+        top_n_by_turnover: 800
+      filters:
+        min_price_jpy: 100
+        exclude_zero_volume_days: true
+    etf:
+      market: TSE_ETF
+      liquidity_filter:
+        avg_turnover_20d_min_jpy: 50000000    # 5,000万円
+        top_n_by_turnover: 300
+      filters:
+        exclude_zero_volume_days: true
+
+# ---------------------------------------------------------------------------
+# テクニカル指標
+# ---------------------------------------------------------------------------
+features:
+  moving_averages: [20, 50, 100, 200]
+  rsi:
+    period: 14
+  atr:
+    period: 14
+  volume_ratio:
+    ma_period: 20
+  turnover:
+    window_days: 20              # turnover_jpy = close * volume
+
+# ---------------------------------------------------------------------------
+# 売買執行
+# ---------------------------------------------------------------------------
+execution:
+  entry_timing: next_open        # シグナル翌日寄り
+  rebalance: weekly              # 週1で入れ替え
+  max_positions: 20              # 同時保有数（Top20）
+  transaction_cost_roundtrip: 0.003  # 往復0.3%
+  slippage_included: true
+
+# ---------------------------------------------------------------------------
+# 保有・手仕舞い
+# ---------------------------------------------------------------------------
+holding:
+  # バックテスト用: 複数ホライズンで成績を測る「物差し」
+  holding_days_candidates: [5, 10, 15, 20, 60, 120, 252]
+
+  # 実運用: OR条件（どれか先にヒットしたら手仕舞い）
+  exits:
+    logic: or                    # どれか1つでも成立したら手仕舞い
+    use_time_exit: true
+    use_trailing_atr: true
+    trailing_atr_mult: 2.0
+    use_trend_exit: true
+    trend_exit_rule:
+      type: close_lt_sma
+      period: 50
+
+# ---------------------------------------------------------------------------
+# パターン定義 (A/B/C/D)
+# ---------------------------------------------------------------------------
+patterns:
+  # A：トレンド継続（主力）
+  A_trend:
+    entry:
+      - close_gt_sma: 200
+      - sma_gt_sma: {fast: 50, slow: 200}
+      - sma_slope_positive: {period: 50, lookback: 10}
+    notes: "長期上昇基調の継続を狙う"
+
+  # B：押し目（勝率を取りに行く）
+  B_pullback:
+    entry:
+      - close_gt_sma: 100
+      - rsi_between: [40, 55]
+      - pullback_atr_between: [1.0, 2.5]
+        # 定義: (直近N日高値 - 当日終値) / ATR。N=10日で直近高値を取得
+      - reversal_break_prev_high: true
+        # 定義: 当日終値 > 前日高値
+    pullback_high_lookback: 10   # 直近高値の参照日数
+    notes: "上昇トレンド中の押し目反転を狙う"
+
+  # C：ブレイクアウト（伸びるがダマしもある）
+  C_breakout:
+    entry:
+      - breakout_high: 20        # 20日高値更新
+      - volume_ratio_gt: 1.5    # 出来高増
+      - atr_percent_rank_le: 40  # 直前ボラが低め（収縮）
+    atr_percent_rank_window: 60  # ATR%パーセンタイル順位の計算期間（60日）
+    notes: "需給で上抜ける局面を狙う"
+
+  # D：リバーサル（補助枠、主力にしない）
+  D_reversal:
+    entry:
+      - close_gt_sma: 200        # 下落トレンド銘柄は避ける
+      - drop_pct_last_n_days_between: {n: 5, range: [-0.15, -0.08]}
+      - bullish_reversal_candle: true
+    notes: "急落後の反発（難易度高いので控えめ）"
+
+# ---------------------------------------------------------------------------
+# ローソク足パターン定義
+# ---------------------------------------------------------------------------
+candle_patterns:
+  bullish_reversal_candle:
+    # ハンマー系の最小定義
+    type: hammer
+    rules:
+      lower_shadow_min_body_ratio: 1.5   # 下ヒゲ ≥ 実体 × 1.5
+      body_max_range_ratio: 0.40         # 実体 ≤ 当日レンジの 40%
+      close_gte_open: true               # 終値 ≥ 始値（陽線 or 同等）
+
+# ---------------------------------------------------------------------------
+# スコアリング
+# ---------------------------------------------------------------------------
+scoring:
+  # 推奨ランキング用の基本点
+  base_points:
+    A_trend: 30
+    B_pullback: 28
+    C_breakout: 25
+    D_reversal: 10
+
+  # 補正（強さ係数） = base × Π(multiplier)
+  multipliers:
+    common:
+      # 流動性: 売買代金が弱いものは減点
+      turnover_rank:
+        type: piecewise
+        points:
+          - {top_pct: 10,  m: 1.10}
+          - {top_pct: 30,  m: 1.00}
+          - {top_pct: 60,  m: 0.90}
+          - {else: true,   m: 0.80}
+
+      # ボラ: 荒すぎる銘柄を減点（atr% = atr / close）
+      atr_percent:
+        type: linear
+        params: {x0: 0.015, x1: 0.050, m0: 1.05, m1: 0.85}
+        clip: [0.80, 1.10]
+
+      # 出来高: 特にブレイクで重要
+      volume_ratio:
+        type: piecewise
+        points:
+          - {lte: 1.0, m: 0.85}
+          - {lte: 1.3, m: 1.00}
+          - {lte: 1.8, m: 1.10}
+          - {gt: 1.8,  m: 1.20}
+
+  # パターンごとに適用する補正
+  apply_to_pattern:
+    A_trend: [turnover_rank, atr_percent]
+    B_pullback: [turnover_rank, atr_percent]
+    C_breakout: [turnover_rank, atr_percent, volume_ratio]
+    D_reversal: [turnover_rank, atr_percent]
+
+  # ETF用オーバーライド
+  instrument_overrides:
+    ETF:
+      base_points:
+        C_breakout: 22
+      multipliers:
+        common:
+          volume_ratio:
+            type: piecewise
+            points:
+              - {lte: 1.0, m: 0.90}
+              - {lte: 1.3, m: 1.00}
+              - {lte: 1.8, m: 1.05}
+              - {gt: 1.8,  m: 1.10}
+
+# ---------------------------------------------------------------------------
+# 過去評価（バックテスト）
+# ---------------------------------------------------------------------------
+evaluation:
+  lookback_years: 3
+  horizons_days: [5, 10, 15, 20, 60, 120, 252]
+  metrics:
+    - cagr
+    - annual_vol
+    - sharpe
+    - sortino
+    - max_drawdown
+    - win_rate
+    - profit_factor
+  primary_risk_metric: max_drawdown
+
+# ---------------------------------------------------------------------------
+# ベンチマーク: 日経225 Buy&Hold
+# ---------------------------------------------------------------------------
+benchmark:
+  name: Nikkei225_BuyHold
+  ticker: ^N225
+  rule: buy_and_hold
