@@ -124,7 +124,10 @@ def get_data_dates() -> dict[str, str]:
         parquets = list(CACHE_DIR.glob("*.parquet"))
         if parquets:
             try:
-                sample = pd.read_parquet(parquets[0])
+                # 任意の先頭ファイルだと古いキャッシュを引くことがあるため、
+                # 更新日時が一番新しいファイルを参照する。
+                newest = max(parquets, key=lambda p: p.stat().st_mtime)
+                sample = pd.read_parquet(newest)
                 sample.index = pd.to_datetime(sample.index)
                 info["latest_data"] = sample.index.max().strftime("%Y-%m-%d")
             except Exception:

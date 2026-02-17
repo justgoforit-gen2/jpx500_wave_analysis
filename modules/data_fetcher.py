@@ -59,17 +59,24 @@ def fetch_single(ticker: str, start: str, end: str) -> pd.DataFrame | None:
 def fetch_and_cache(ticker: str, full_refresh: bool = False) -> pd.DataFrame | None:
     """1銘柄のデータを取得しキャッシュに保存（差分更新対応）"""
     cache = _cache_path(ticker)
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=DATA_PERIOD_YEARS * 365 + 30)).strftime("%Y-%m-%d")
+    # yfinanceのdownloadは end が実質「排他的」になりやすく、
+    # end=今日 だと終値が今日分まで入らず「常に1日遅れ」に見えることがある。
+    # そのため end は翌日を指定し、当日分が取れるようにする。
+    now = datetime.now()
+    end_day = (now + timedelta(days=1)).date()
+    end_date = end_day.strftime("%Y-%m-%d")
+    start_date = (now - timedelta(days=DATA_PERIOD_YEARS * 365 + 30)).strftime("%Y-%m-%d")
 
     existing = None
     if cache.exists() and not full_refresh:
         existing = pd.read_parquet(cache)
         existing.index = pd.to_datetime(existing.index)
-        last_date = existing.index.max()
+        last_ts = existing.index.max()
+        last_day = last_ts.date() if hasattr(last_ts, "date") else pd.Timestamp(last_ts).date()
         # 差分取得: 最終日の翌日から
-        diff_start = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        if diff_start >= end_date:
+        diff_start_day = last_day + timedelta(days=1)
+        diff_start = diff_start_day.strftime("%Y-%m-%d")
+        if diff_start_day >= end_day:
             return existing  # 最新まである
         new_data = fetch_single(ticker, diff_start, end_date)
         if new_data is not None and len(new_data) > 0:
