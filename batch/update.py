@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.settings import CACHE_DIR, DAILY_PICKS_CSV, DEFAULT_WINDOW, RESULTS_CSV
 from modules.data_fetcher import fetch_all, load_stock_list
 from modules.earnings_fetcher import fetch_earnings_data
+from modules.strategy_engine import generate_ranking
+from modules.strategy_loader import load_strategy
 from modules.wave_classifier import classify_all, generate_daily_picks
 
 # ログ設定
@@ -84,6 +86,32 @@ def main():
         logger.info(f"  上タッチ（利確/ブレイク監視）: {len(high_touch)}銘柄")
         for _, p in picks_df.iterrows():
             logger.info(f"    {p['code']} {p['name']} | {p['pick_type']} | ¥{p['latest_close']:,.0f} (位置{p['position_pct']}%)")
+
+    # Step 3.5: ABCD戦略ランキング（Cloud表示用CSV）
+    logger.info("ABCD戦略ランキングを生成中...")
+    try:
+        strategy = load_strategy()
+        stock_list_df = load_stock_list()
+        ranking_df = generate_ranking(
+            stock_list_df,
+            load_cached_fn=lambda t: __import__("modules.data_fetcher", fromlist=["load_cached"]).load_cached(t),
+            strategy=strategy,
+            max_positions=None,
+        )
+
+        out_path = Path(__file__).resolve().parent.parent / "data" / "abcd_ranking.csv"
+        if ranking_df is None or len(ranking_df) == 0:
+            # 空でもファイルは出しておく（Cloud側の確認用）
+            ranking_df = ranking_df if ranking_df is not None else None
+            logger.info("ABCD戦略: シグナルなし（ランキング空）")
+            # ヘッダだけでも残す
+            import pandas as pd
+            pd.DataFrame().to_csv(out_path, index=False, encoding="utf-8-sig")
+        else:
+            ranking_df.to_csv(out_path, index=True, index_label="rank", encoding="utf-8-sig")
+            logger.info(f"ABCD戦略ランキング: {len(ranking_df)}銘柄 → {out_path}")
+    except Exception as e:
+        logger.warning(f"ABCD戦略ランキング生成に失敗: {e}")
 
     # Step 4: 決算発表予定日データ取得
     logger.info("決算発表予定日データを取得中...")

@@ -73,11 +73,11 @@ holding:
     logic: or                    # どれか1つでも成立したら手仕舞い
     use_time_exit: true
     use_trailing_atr: true
-    trailing_atr_mult: 2.0
+    trailing_atr_mult: 3.0
     use_trend_exit: true
     trend_exit_rule:
       type: close_lt_sma
-      period: 50
+      period: 200
 
 # ---------------------------------------------------------------------------
 # パターン定義 (A/B/C/D)

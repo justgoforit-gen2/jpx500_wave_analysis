@@ -39,6 +39,7 @@ from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for
 from modules.wave_classifier import compute_indicators, classify
 from modules.strategy_engine import generate_ranking
 from modules.strategy_loader import load_strategy
+from modules.backtester import build_contexts, run_backtest
 
 st.set_page_config(
     page_title="JPX500 波形分類",
@@ -163,6 +164,19 @@ def load_daily_picks() -> pd.DataFrame | None:
     if DAILY_PICKS_CSV.exists():
         return pd.read_csv(DAILY_PICKS_CSV, encoding="utf-8-sig", dtype={"code": str})
     return None
+
+
+def load_abcd_ranking() -> pd.DataFrame | None:
+    fp = Path(__file__).resolve().parent / "data" / "abcd_ranking.csv"
+    if not fp.exists():
+        return None
+    try:
+        df = pd.read_csv(fp, encoding="utf-8-sig", dtype={"code": str})
+        if "rank" in df.columns:
+            df.set_index("rank", inplace=True)
+        return df
+    except Exception:
+        return None
 
 
 def is_recommended(row: pd.Series) -> bool:
@@ -380,31 +394,44 @@ def show_list_view():
             for col in ["時価総額合計（億円）", "時価総額取得数", "時価総額取得率（%）"]:
                 if col in display_cols_sector:
                     display_cols_sector.remove(col)
+        # 解除ボタンが押された直後はテーブル選択をリセット
+        _sector_table_key = "sector_table"
+        if st.session_state.get("_clear_sector_flag"):
+            _sector_table_key = f"sector_table_{st.session_state.get('_sector_table_ver', 0)}"
+
         sector_event = st.dataframe(
             sector_display[[c for c in display_cols_sector if c in sector_display.columns]],
             use_container_width=True,
             hide_index=True,
             height=400,
             on_select="rerun",
-            selection_mode="single-row",
-            key="sector_table",
+            selection_mode="multi-row",
+            key=_sector_table_key,
         )
-        # 業種クリック → 絞り込み
-        if sector_event and sector_event.selection and sector_event.selection.rows:
-            selected_sector_idx = sector_event.selection.rows[0]
-            selected_sector_name = sector_stats.iloc[selected_sector_idx]["sector_33"]
-            st.session_state["quick_sector_filter"] = selected_sector_name
+        # 業種クリック → 絞り込み（複数選択対応）
+        if st.session_state.get("_clear_sector_flag"):
+            # 解除直後: フラグをクリアして選択なし状態にする
+            st.session_state["_clear_sector_flag"] = False
+            st.session_state["quick_sector_filter"] = None
+        elif sector_event and sector_event.selection and sector_event.selection.rows:
+            selected_sector_names = [sector_stats.iloc[i]["sector_33"] for i in sector_event.selection.rows]
+            st.session_state["quick_sector_filter"] = selected_sector_names
         elif "quick_sector_filter" not in st.session_state:
             st.session_state["quick_sector_filter"] = None
     else:
         st.caption("業種データがありません。")
 
-    # 業種絞り込み表示
-    quick_sector = st.session_state.get("quick_sector_filter")
-    if quick_sector:
-        filtered = filtered[filtered["sector_33"] == quick_sector] if "sector_33" in filtered.columns else filtered
-        if st.button(f"業種絞り込み解除（現在: {quick_sector}）", key="btn_clear_sector"):
+    # 業種絞り込み表示（複数対応）
+    quick_sectors = st.session_state.get("quick_sector_filter")
+    if quick_sectors:
+        if "sector_33" in filtered.columns:
+            filtered = filtered[filtered["sector_33"].isin(quick_sectors)]
+        label = "、".join(quick_sectors) if len(quick_sectors) <= 3 else f"{quick_sectors[0]} 他{len(quick_sectors)-1}業種"
+        if st.button(f"業種絞り込み解除（現在: {label}）", key="btn_clear_sector"):
             st.session_state["quick_sector_filter"] = None
+            # テーブルキーを変えて選択状態をリセット
+            st.session_state["_clear_sector_flag"] = True
+            st.session_state["_sector_table_ver"] = st.session_state.get("_sector_table_ver", 0) + 1
             st.rerun()
 
     # --- PER×PBR 散布図 ---
@@ -941,25 +968,30 @@ def show_strategy_view():
         st.error("銘柄リストがありません。先にバッチ更新を実行してください。")
         return
 
-    # キャッシュデータの存在確認
-    if not CACHE_DIR.exists() or len(list(CACHE_DIR.glob("*.parquet"))) == 0:
-        st.warning("株価キャッシュデータがありません。バッチ更新を実行してください。")
-        st.code("cd jpx500_wave_analysis && python batch/update.py")
-        return
+    # Cloud向け: 事前計算済みランキングがあればそれを使用
+    precomputed = load_abcd_ranking()
+    if precomputed is not None and len(precomputed) > 0:
+        ranking = precomputed
+    else:
+        # キャッシュデータの存在確認
+        if not CACHE_DIR.exists() or len(list(CACHE_DIR.glob("*.parquet"))) == 0:
+            st.warning("株価キャッシュデータがありません。バッチ更新を実行してください。")
+            st.code("cd jpx500_wave_analysis && python batch/update.py")
+            return
 
-    # キャッシュ付きランキング生成
-    @st.cache_data(ttl=3600, show_spinner="ABCD戦略を計算中...")
-    def _cached_ranking(_stock_hash: str) -> pd.DataFrame:
-        return generate_ranking(
-            stock_list_df,
-            load_cached_fn=load_cached,
-            strategy=strategy,
-            max_positions=None,  # 全件計算してからフィルタ
-        )
+        # キャッシュ付きランキング生成
+        @st.cache_data(ttl=3600, show_spinner="ABCD戦略を計算中...")
+        def _cached_ranking(_stock_hash: str) -> pd.DataFrame:
+            return generate_ranking(
+                stock_list_df,
+                load_cached_fn=load_cached,
+                strategy=strategy,
+                max_positions=None,  # 全件計算してからフィルタ
+            )
 
-    # stock_list のハッシュ（キャッシュキー用）
-    stock_hash = str(len(stock_list_df)) + "_" + str(dates.get("latest_data", ""))
-    ranking = _cached_ranking(stock_hash)
+        # stock_list のハッシュ（キャッシュキー用）
+        stock_hash = str(len(stock_list_df)) + "_" + str(dates.get("latest_data", ""))
+        ranking = _cached_ranking(stock_hash)
 
     if ranking is None or len(ranking) == 0:
         st.warning("現在シグナルが成立している銘柄はありません。")
@@ -1047,6 +1079,773 @@ def show_strategy_view():
 
 
 # ------------------------------------------------------------------
+# バックテスト可視化タブ（Streamlit + Plotly）
+# ------------------------------------------------------------------
+def show_backtest_view():
+    st.title("バックテスト / シナリオ結果")
+
+    base_dir = Path(__file__).resolve().parent
+    data_dir = base_dir / "data"
+    scenarios_dir = data_dir / "scenarios"
+
+    summary_fp = data_dir / "backtest_summary.csv"
+    trades_fp = data_dir / "backtest_trades.csv"
+    monthly_fp = data_dir / "backtest_monthly.csv"
+    enriched_fp = data_dir / "backtest_trades_enriched.csv"
+    grid_fp = scenarios_dir / "summary_grid.csv"
+
+    missing = [p for p in [summary_fp, trades_fp, monthly_fp] if not p.exists()]
+    if missing:
+        st.error("バックテスト結果CSVが不足しています。先に batch/backtest.py を実行してください。")
+        st.write("不足:")
+        for p in missing:
+            st.write(f"- {p}")
+        return
+
+    @st.cache_data(ttl=3600)
+    def _read_csv(path: Path) -> pd.DataFrame:
+        return pd.read_csv(path, encoding="utf-8-sig")
+
+    summary = _read_csv(summary_fp)
+    trades = _read_csv(trades_fp)
+    monthly = _read_csv(monthly_fp)
+    enriched = _read_csv(enriched_fp) if enriched_fp.exists() else None
+    grid = _read_csv(grid_fp) if grid_fp.exists() else None
+
+    # normalize
+    for c in [
+        "initial_capital",
+        "final_equity",
+        "total_return_pct",
+        "cagr",
+        "annual_vol",
+        "sharpe",
+        "sortino",
+        "max_drawdown",
+        "trade_count",
+        "win_rate",
+        "profit_factor",
+        "avg_positions",
+    ]:
+        if c in summary.columns:
+            summary[c] = pd.to_numeric(summary[c], errors="coerce")
+
+    for c in ["pnl", "return_pct"]:
+        if c in trades.columns:
+            trades[c] = pd.to_numeric(trades[c], errors="coerce")
+
+    policies = [p for p in ["fixed_amount", "fixed_rate"] if p in set(summary.get("policy", []))]
+    if not policies:
+        policies = sorted(summary["policy"].dropna().unique().tolist())
+
+    default_policy = "fixed_rate" if "fixed_rate" in policies else policies[0]
+    policy = st.selectbox("ポリシー", policies, index=policies.index(default_policy))
+
+    srow = summary[summary["policy"] == policy].iloc[0]
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("元本", f"{int(srow['initial_capital']):,}円")
+    c2.metric("最終資産", f"{int(round(srow['final_equity'])):,}円")
+    c3.metric("総リターン", f"{float(srow['total_return_pct']):.3f}%")
+    c4.metric("CAGR", f"{float(srow['cagr']):.4f}")
+    c5.metric("最大DD", f"{float(srow['max_drawdown']):.4f}")
+
+    # --- 月次: 収益・回数・勝率・exit内訳 ---
+    st.subheader("月次成績（収益・取引回数・勝率・exit内訳）")
+
+    m = monthly[monthly["policy"] == policy].copy()
+    for c in [
+        "month_return_pct",
+        "trades_closed",
+        "win_rate",
+        "total_pnl",
+        "rebalance_drop",
+        "time_exit",
+        "trailing_atr",
+        "trend_exit",
+    ]:
+        if c in m.columns:
+            m[c] = pd.to_numeric(m[c], errors="coerce")
+
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Bar(x=m["ym"], y=m["trades_closed"], name="trades_closed", opacity=0.6), secondary_y=False)
+    fig.add_trace(go.Scatter(x=m["ym"], y=m["win_rate"] * 100.0, name="win_rate(%)", mode="lines+markers"), secondary_y=True)
+    fig.update_layout(
+        height=380,
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis_tickangle=45,
+        legend_orientation="h",
+    )
+    fig.update_yaxes(title_text="Trades closed", secondary_y=False)
+    fig.update_yaxes(title_text="Win rate (%)", secondary_y=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig2 = go.Figure()
+    exit_cols = [c for c in ["rebalance_drop", "time_exit", "trailing_atr", "trend_exit"] if c in m.columns]
+    for col in exit_cols:
+        fig2.add_trace(go.Bar(x=m["ym"], y=m[col], name=col))
+    fig2.update_layout(
+        barmode="stack",
+        height=380,
+        title="exit理由（件数）",
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_tickangle=45,
+        legend_orientation="h",
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # 月次リターン
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=m["ym"], y=m["month_return_pct"], name="month_return_pct", mode="lines+markers"))
+    fig3.update_layout(
+        height=320,
+        title="月次リターン(%)",
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_tickangle=45,
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # --- パターン（入口）× exit（出口） ---
+    st.subheader("パターン別（入口）× exit理由（出口）")
+    t = trades[trades["policy"] == policy].copy()
+    t["is_win"] = t["pnl"] > 0
+
+    pat = (
+        t.groupby("pattern", dropna=False)
+        .agg(trade_count=("pnl", "size"), win_rate=("is_win", "mean"), avg_return_pct=("return_pct", "mean"))
+        .reset_index()
+        .sort_values("trade_count", ascending=False)
+    )
+    top_k = st.slider("表示パターン数（上位）", 5, 30, 12)
+    pat_top = pat.head(top_k)
+    pat_top = pat_top.copy()
+    pat_top["win_rate_pct"] = pat_top["win_rate"] * 100.0
+
+    fig4 = px.bar(
+        pat_top,
+        x="pattern",
+        y="win_rate_pct",
+        text="trade_count",
+        labels={"win_rate_pct": "Win rate (%)", "pattern": "pattern"},
+        title="パターン別 勝率（棒） / 取引回数（テキスト）",
+    )
+    fig4.update_traces(textposition="outside")
+    fig4.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10))
+    st.plotly_chart(fig4, use_container_width=True)
+
+    ct = pd.crosstab(t["pattern"].fillna("unknown"), t["exit_reason"].fillna("unknown"))
+    if len(ct.index) > top_k:
+        keep = pat_top["pattern"].astype(str).tolist()
+        ct = ct.loc[[p for p in ct.index if str(p) in set(keep)]]
+
+    fig5 = px.imshow(
+        ct,
+        text_auto=True,
+        aspect="auto",
+        title="Pattern × Exit reason（件数）",
+    )
+    fig5.update_layout(height=max(380, 28 * len(ct.index)), margin=dict(l=10, r=10, t=50, b=10))
+    st.plotly_chart(fig5, use_container_width=True)
+
+    # --- 負け要因（RSI） ---
+    st.subheader("負け要因（RSI帯 × exit理由 など）")
+    if enriched is None or enriched.empty:
+        st.info("data/backtest_trades_enriched.csv が無いため、RSI要因の可視化はスキップします。")
+    else:
+        e = enriched[enriched["policy"] == policy].copy()
+        for c in ["pnl", "return_pct", "rsi_signal"]:
+            if c in e.columns:
+                e[c] = pd.to_numeric(e[c], errors="coerce")
+        loss = e[e.get("is_loss", False) == True].copy() if "is_loss" in e.columns else e[e["pnl"] < 0].copy()  # noqa: E712
+        if loss.empty:
+            st.write("負けトレードがありません。")
+        else:
+            if "rsi_bin" in loss.columns and "exit_reason" in loss.columns:
+                ctl = pd.crosstab(loss["rsi_bin"].fillna("unknown"), loss["exit_reason"].fillna("unknown"))
+                share = ctl.div(ctl.sum(axis=1).replace(0, pd.NA), axis=0).fillna(0)
+
+                fig6 = go.Figure()
+                for col in share.columns:
+                    fig6.add_trace(go.Bar(x=share.index.astype(str), y=share[col], name=str(col)))
+                fig6.update_layout(
+                    barmode="stack",
+                    height=380,
+                    title="負けトレード: RSI帯ごとの exit理由構成比",
+                    margin=dict(l=10, r=10, t=50, b=10),
+                )
+                st.plotly_chart(fig6, use_container_width=True)
+
+            if "rsi_bin" in loss.columns and "return_pct" in loss.columns:
+                fig7 = px.box(
+                    loss,
+                    x="rsi_bin",
+                    y="return_pct",
+                    points=False,
+                    title="負けトレード: RSI帯別の損失分布（return %）",
+                )
+                fig7.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10))
+                st.plotly_chart(fig7, use_container_width=True)
+
+            if "rsi_signal" in loss.columns and "return_pct" in loss.columns and "exit_reason" in loss.columns:
+                fig8 = px.scatter(
+                    loss,
+                    x="rsi_signal",
+                    y="return_pct",
+                    color="exit_reason",
+                    hover_data=["ticker", "pattern", "entry_date", "exit_date"],
+                    title="負けトレード: rsi_signal × return %（色=exit理由）",
+                )
+                fig8.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
+                st.plotly_chart(fig8, use_container_width=True)
+
+    # --- シナリオ比較（summary_grid.csv） ---
+    st.subheader("シナリオ比較（summary_grid.csv）")
+    if grid is None or grid.empty:
+        st.info("data/scenarios/summary_grid.csv が無いため、シナリオ比較はスキップします。")
+        return
+
+    g = grid[grid["policy"] == policy].copy()
+    for c in ["cagr", "max_drawdown", "total_return_pct", "trade_count"]:
+        if c in g.columns:
+            g[c] = pd.to_numeric(g[c], errors="coerce")
+
+    fig9 = px.scatter(
+        g,
+        x="max_drawdown",
+        y="cagr",
+        color="scenario",
+        hover_data=["total_return_pct", "trade_count"],
+        title="CAGR × 最大DD（点=シナリオ）",
+    )
+    fig9.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
+    st.plotly_chart(fig9, use_container_width=True)
+
+    top_n = st.slider("上位表示数", 5, 30, 12)
+    metric = st.selectbox("ランキング指標", ["total_return_pct", "cagr", "max_drawdown", "trade_count"], index=0)
+    ascending = metric in {"max_drawdown"}
+    top = g.sort_values(metric, ascending=ascending).head(top_n)
+    fig10 = px.bar(
+        top,
+        x="scenario",
+        y=metric,
+        title=f"上位{top_n}: {metric}",
+    )
+    fig10.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10), xaxis_tickangle=45)
+    st.plotly_chart(fig10, use_container_width=True)
+
+    # equity curve compare
+    st.subheader("エクイティカーブ比較（シナリオ別）")
+    scenario_options = sorted(g["scenario"].dropna().unique().tolist())
+    baseline = next((s for s in scenario_options if str(s).startswith("S0_baseline")), None)
+    best = str(g.sort_values("cagr", ascending=False).iloc[0]["scenario"]) if len(g) else None
+    default_sel = [x for x in [baseline, best] if x]
+    selected = st.multiselect(
+        "比較するシナリオ",
+        options=scenario_options,
+        default=default_sel,
+    )
+    include_nikkei = st.checkbox("日経225（Buy&Hold）も重ねる（元本1000万に補正）", value=True)
+    if selected:
+        curves = []
+        for scen in selected:
+            fp = scenarios_dir / scen / "backtest_equity_curve.csv"
+            if not fp.exists():
+                continue
+            eq = _read_csv(fp)
+            eq = eq[eq["policy"] == policy].copy()
+            if eq.empty:
+                continue
+            eq["date"] = pd.to_datetime(eq["date"], errors="coerce")
+            eq["equity"] = pd.to_numeric(eq["equity"], errors="coerce")
+            eq["scenario"] = scen
+            curves.append(eq[["date", "equity", "scenario"]])
+        if curves:
+            dfc = pd.concat(curves, ignore_index=True)
+
+            if include_nikkei:
+                @st.cache_data(ttl=3600)
+                def _load_nikkei() -> pd.DataFrame | None:
+                    return get_nikkei225()
+
+                nikkei = _load_nikkei()
+                if nikkei is None or nikkei.empty:
+                    st.info("日経225データ（^N225）を取得できませんでした。ネットワークやキャッシュを確認してください。")
+                else:
+                    close_col = "Close" if "Close" in nikkei.columns else ("close" if "close" in nikkei.columns else None)
+                    if close_col is None:
+                        st.info("日経225データに Close 列がありませんでした。")
+                    else:
+                        nk = nikkei.copy()
+                        nk.index = pd.to_datetime(nk.index, errors="coerce")
+                        nk = nk[nk.index.notna()]
+
+                        dmin = pd.to_datetime(dfc["date"].min(), errors="coerce")
+                        dmax = pd.to_datetime(dfc["date"].max(), errors="coerce")
+                        if pd.notna(dmin) and pd.notna(dmax):
+                            nk = nk[(nk.index >= dmin) & (nk.index <= dmax)]
+
+                        if len(nk) >= 2:
+                            base = float(srow.get("initial_capital", 10_000_000.0))
+                            c0 = float(pd.to_numeric(nk[close_col].iloc[0], errors="coerce"))
+                            if c0 and pd.notna(c0):
+                                equity_nk = base * (pd.to_numeric(nk[close_col], errors="coerce") / c0)
+                                add = pd.DataFrame({
+                                    "date": nk.index,
+                                    "equity": equity_nk,
+                                    "scenario": "Nikkei225_BuyHold",
+                                })
+                                dfc = pd.concat([dfc, add], ignore_index=True)
+
+            fig11 = px.line(dfc, x="date", y="equity", color="scenario", title="Equity curve")
+            fig11.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
+            st.plotly_chart(fig11, use_container_width=True)
+        else:
+            st.info("選択したシナリオのエクイティカーブCSVが見つかりませんでした。")
+
+
+# ------------------------------------------------------------------
+# 投資スタイル最適化タブ
+# ------------------------------------------------------------------
+import numpy as np  # noqa: E402  (already available via plotly deps)
+
+
+_STYLE_OPTIMIZER_PATTERNS: dict[str, set[str]] = {
+    "全(A+B+C+D)":  {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
+    "A+B+C":        {"A_trend", "B_pullback", "C_breakout"},
+    "A+B":          {"A_trend", "B_pullback"},
+    "A+C":          {"A_trend", "C_breakout"},
+    "B+C":          {"B_pullback", "C_breakout"},
+    "Aのみ":        {"A_trend"},
+    "Cのみ":        {"C_breakout"},
+}
+
+_STYLE_HOLDING_DAYS = {
+    "短期（5〜20日）":  [5, 10, 15, 20],
+    "中期（30〜60日）": [30, 60],
+    "長期（120〜252日）": [120, 252],
+}
+
+
+@st.cache_resource(show_spinner="銘柄データを読み込み中（初回のみ時間がかかります）...")
+def _load_optimizer_contexts():
+    """コンテキストをキャッシュ（1アプリ起動につき1回だけ構築）"""
+    base_dir = Path(__file__).resolve().parent
+    strategy = load_strategy(base_dir / "config" / "strategy.yaml")
+    stock_list_df = load_stock_list()
+    bench = load_cached("^N225")
+    if bench is None or len(bench) < 250:
+        return None, None, None, None, None
+    bench = bench.copy()
+    bench.index = pd.to_datetime(bench.index)
+    bench.sort_index(inplace=True)
+    end_date = pd.Timestamp(bench.index.max())
+    contexts = build_contexts(
+        stock_list_df=stock_list_df,
+        load_cached_fn=load_cached,
+        strategy=strategy,
+        end_date=end_date,
+    )
+    trading_days = pd.DatetimeIndex(bench.index)
+    return contexts, strategy, trading_days, end_date, bench
+
+
+def _nikkei_bench_metrics_app(bench_df, start_date, end_date):
+    close_col = "Close" if "Close" in bench_df.columns else "close"
+    nk = bench_df.copy()
+    nk.index = pd.to_datetime(nk.index)
+    nk = nk[(nk.index >= start_date) & (nk.index <= end_date)]
+    if len(nk) < 2:
+        return {}
+    closes = pd.to_numeric(nk[close_col], errors="coerce").dropna()
+    start_price, end_price = float(closes.iloc[0]), float(closes.iloc[-1])
+    total_return = (end_price / start_price - 1.0) * 100.0
+    years = max((closes.index[-1] - closes.index[0]).days / 365.25, 1e-9)
+    cagr = (end_price / start_price) ** (1.0 / years) - 1.0
+    peak = -np.inf
+    mdd = 0.0
+    for v in closes:
+        peak = max(peak, v)
+        dd = (v / peak) - 1.0 if peak > 0 else 0.0
+        mdd = min(mdd, dd)
+    rets = closes.pct_change().dropna()
+    sharpe = float((rets.mean() / rets.std()) * np.sqrt(252)) if rets.std() > 0 else 0.0
+    return {
+        "total_return_pct": round(total_return, 3),
+        "cagr": round(cagr, 6),
+        "max_drawdown": round(mdd, 6),
+        "sharpe": round(sharpe, 6),
+    }
+
+
+def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
+    import plotly.graph_objects as go
+
+    df = pd.read_csv(opt_csv, encoding="utf-8-sig")
+    for c in ["total_return_pct", "cagr", "max_drawdown", "sharpe", "win_rate",
+              "trade_count", "beats_nikkei", "excess_return_pct"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    nikkei_total = float(df["nikkei_total_return_pct"].dropna().iloc[0]) if "nikkei_total_return_pct" in df.columns else 0.0
+    nikkei_cagr = float(df["nikkei_cagr"].dropna().iloc[0]) if "nikkei_cagr" in df.columns else 0.0
+
+    # 日経225指標
+    st.subheader("📊 日経225 ベンチマーク（Buy & Hold）")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("総リターン", f"{nikkei_total:+.2f}%")
+    c2.metric("CAGR", f"{nikkei_cagr:.4f}")
+    if "nikkei_max_drawdown" in df.columns:
+        nk_dd = float(df["nikkei_max_drawdown"].dropna().iloc[0])
+        c3.metric("最大DD", f"{nk_dd:.4f}")
+    if "nikkei_sharpe" in df.columns:
+        nk_sh = float(df["nikkei_sharpe"].dropna().iloc[0])
+        c4.metric("Sharpe", f"{nk_sh:.4f}")
+
+    # スタイル別ベスト
+    st.subheader("🏆 スタイル別 ベスト設定（CAGR順）")
+    style_cols = st.columns(3)
+    for i, style_name in enumerate(["短期", "中期", "長期"]):
+        sub = df[df["style"] == style_name].sort_values("cagr", ascending=False)
+        with style_cols[i]:
+            if sub.empty:
+                st.info(f"{style_name}: データなし")
+                continue
+            best = sub.iloc[0]
+            beats = bool(best.get("beats_nikkei", False))
+            badge = "✅ 日経225超" if beats else "❌ 日経225未達"
+            st.markdown(f"**【{style_name}】** {badge}")
+            st.markdown(f"保有日数: **{int(best['holding_days'])}日**")
+            st.markdown(f"パターン: **{best['pattern_combo']}**")
+            st.metric("総リターン", f"{best.get('total_return_pct', 0):+.2f}%",
+                      delta=f"vs 日経 {best.get('excess_return_pct', 0):+.2f}%")
+            st.metric("CAGR", f"{best.get('cagr', 0):.4f}")
+            st.metric("最大DD", f"{best.get('max_drawdown', 0):.4f}")
+            st.metric("Sharpe", f"{best.get('sharpe', 0):.4f}")
+            st.metric("勝率", f"{best.get('win_rate', 0):.1%}")
+
+    # フィルタ付きランキング表
+    st.subheader("📋 全シナリオ 成績一覧")
+    filter_beats = st.checkbox("日経225を上回る設定のみ表示", value=True, key="opt_filter_beats")
+    filter_styles = st.multiselect(
+        "スタイル絞り込み",
+        options=["短期", "中期", "長期"],
+        default=["短期", "中期", "長期"],
+        key="opt_style_filter",
+    )
+
+    show = df.copy()
+    if filter_beats:
+        show = show[show["beats_nikkei"] == True]  # noqa: E712
+    if filter_styles:
+        show = show[show["style"].isin(filter_styles)]
+
+    show = show.sort_values("cagr", ascending=False)
+
+    display_cols = [
+        "style", "holding_days", "pattern_combo",
+        "total_return_pct", "excess_return_pct",
+        "cagr", "max_drawdown", "sharpe", "win_rate", "trade_count",
+    ]
+    display_cols = [c for c in display_cols if c in show.columns]
+    rename_map = {
+        "style": "スタイル", "holding_days": "保有日数", "pattern_combo": "パターン",
+        "total_return_pct": "総リターン%", "excess_return_pct": "超過リターン%",
+        "cagr": "CAGR", "max_drawdown": "最大DD", "sharpe": "Sharpe",
+        "win_rate": "勝率", "trade_count": "取引数",
+    }
+    st.dataframe(
+        show[display_cols].rename(columns=rename_map),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # エクイティカーブ
+    if equity_csv.exists():
+        st.subheader("📈 エクイティカーブ比較")
+        try:
+            eq_df = pd.read_csv(equity_csv, encoding="utf-8-sig")
+            eq_df["date"] = pd.to_datetime(eq_df["date"], errors="coerce")
+            eq_df["equity"] = pd.to_numeric(eq_df["equity"], errors="coerce")
+
+            scenario_options = [s for s in eq_df["scenario_id"].dropna().unique() if s != "Nikkei225_BuyHold"]
+            beats_set = set(df[df["beats_nikkei"] == True]["scenario_id"].tolist())  # noqa: E712
+            default_scenarios = [s for s in scenario_options if s in beats_set][:5]
+
+            selected_scens = st.multiselect(
+                "比較するシナリオを選択（日経225は常に表示）",
+                options=sorted(scenario_options),
+                default=default_scenarios,
+                key="opt_equity_select",
+            )
+
+            plot_scenarios = selected_scens + ["Nikkei225_BuyHold"]
+            plot_df = eq_df[eq_df["scenario_id"].isin(plot_scenarios)].copy()
+
+            if not plot_df.empty:
+                fig = go.Figure()
+                for scen in plot_scenarios:
+                    sub = plot_df[plot_df["scenario_id"] == scen].sort_values("date")
+                    if sub.empty:
+                        continue
+                    is_nikkei = scen == "Nikkei225_BuyHold"
+                    fig.add_trace(go.Scatter(
+                        x=sub["date"],
+                        y=sub["equity"],
+                        name=scen,
+                        line=dict(
+                            width=3 if is_nikkei else 1.5,
+                            dash="dash" if is_nikkei else "solid",
+                            color="orange" if is_nikkei else None,
+                        ),
+                        mode="lines",
+                    ))
+                fig.update_layout(
+                    height=480,
+                    title="エクイティカーブ（定額スタイル vs 日経225 Buy&Hold）",
+                    xaxis_title="日付",
+                    yaxis_title="資産額（円）",
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    legend_orientation="v",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception as exc:
+            st.warning(f"エクイティカーブの読み込みに失敗しました: {exc}")
+
+
+def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
+    """インタラクティブなカスタムシミュレーション"""
+    import plotly.graph_objects as go
+
+    st.markdown("パラメータを指定してリアルタイムでバックテストを実行します。")
+
+    col_left, col_right = st.columns([1, 2])
+
+    with col_left:
+        style_choice = st.selectbox(
+            "投資スタイル",
+            options=["短期（5〜20日）", "中期（30〜60日）", "長期（120〜252日）", "カスタム"],
+            key="custom_style",
+        )
+
+        style_default_days = {
+            "短期（5〜20日）": 10,
+            "中期（30〜60日）": 30,
+            "長期（120〜252日）": 120,
+            "カスタム": 20,
+        }
+        default_days = style_default_days.get(style_choice, 20)
+
+        holding_days = st.slider(
+            "保有日数（time_exit）",
+            min_value=5,
+            max_value=252,
+            value=default_days,
+            step=5,
+            key="custom_holding_days",
+        )
+
+        combo_choice = st.selectbox(
+            "パターン組み合わせ",
+            options=list(_STYLE_OPTIMIZER_PATTERNS.keys()),
+            key="custom_pattern_combo",
+        )
+
+        initial_capital = st.number_input(
+            "初期資金（円）",
+            min_value=1_000_000,
+            max_value=100_000_000,
+            value=10_000_000,
+            step=1_000_000,
+            format="%d",
+            key="custom_initial",
+        )
+
+        max_positions = st.number_input(
+            "最大同時保有数",
+            min_value=1,
+            max_value=20,
+            value=20,
+            key="custom_max_pos",
+        )
+
+        years = st.slider("バックテスト期間（年）", min_value=1, max_value=5, value=3, key="custom_years")
+
+        run_btn = st.button("▶ シミュレーション実行", type="primary", key="custom_run_btn")
+
+    with col_right:
+        if not run_btn:
+            st.info("左のパラメータを設定して「シミュレーション実行」ボタンを押してください。")
+            return
+
+        with st.spinner("シミュレーション実行中...（初回はコンテキスト構築に時間がかかります）"):
+            contexts, strategy, trading_days, end_date, bench = _load_optimizer_contexts()
+
+        if contexts is None:
+            st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
+            return
+
+        allowed_patterns = _STYLE_OPTIMIZER_PATTERNS[combo_choice]
+        start_date = pd.Timestamp(end_date - pd.DateOffset(years=years))
+        td_period = trading_days[(trading_days >= start_date) & (trading_days <= end_date)]
+
+        if len(td_period) < 60:
+            st.error("期間が短すぎます。年数を増やしてください。")
+            return
+
+        nikkei_bench = _nikkei_bench_metrics_app(bench, start_date, end_date)
+        nikkei_total = nikkei_bench.get("total_return_pct", 0.0)
+
+        with st.spinner("バックテスト計算中..."):
+            try:
+                summary_df, trades_df, equity_df = run_backtest(
+                    contexts=contexts,
+                    trading_days=trading_days,
+                    start_date=start_date,
+                    end_date=end_date,
+                    strategy=strategy,
+                    policy="fixed_amount",
+                    initial_capital=float(initial_capital),
+                    max_positions=int(max_positions),
+                    allowed_patterns=allowed_patterns,
+                    time_exit_days_override=holding_days,
+                )
+            except Exception as exc:
+                st.error(f"バックテストエラー: {exc}")
+                return
+
+        if summary_df.empty:
+            st.warning("有効な結果がありませんでした。パラメータや期間を見直してください。")
+            return
+
+        srow = summary_df.iloc[0]
+        total_ret = float(srow.get("total_return_pct", 0))
+        beats = total_ret > nikkei_total
+
+        # 結果メトリクス
+        badge = "✅ 日経225を上回りました！" if beats else "❌ 日経225に届きませんでした"
+        st.markdown(f"### {badge}")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("総リターン", f"{total_ret:+.2f}%", delta=f"vs 日経 {total_ret - nikkei_total:+.2f}%")
+        m2.metric("CAGR", f"{float(srow.get('cagr', 0)):.4f}")
+        m3.metric("最大DD", f"{float(srow.get('max_drawdown', 0)):.4f}")
+        m4.metric("Sharpe", f"{float(srow.get('sharpe', 0)):.4f}")
+        m5.metric("勝率", f"{float(srow.get('win_rate', 0)):.1%}")
+
+        n1, n2, n3, n4 = st.columns(4)
+        n1.metric("取引数", f"{int(srow.get('trade_count', 0))}回")
+        n2.metric("日経225 総リターン", f"{nikkei_total:+.2f}%")
+        n3.metric("日経225 CAGR", f"{nikkei_bench.get('cagr', 0):.4f}")
+        n4.metric("日経225 最大DD", f"{nikkei_bench.get('max_drawdown', 0):.4f}")
+
+        # エクイティカーブ
+        equity_df["date"] = pd.to_datetime(equity_df["date"], errors="coerce")
+        equity_df["equity"] = pd.to_numeric(equity_df["equity"], errors="coerce")
+
+        close_col = "Close" if "Close" in bench.columns else "close"
+        nk = bench.copy()
+        nk.index = pd.to_datetime(nk.index)
+        nk = nk[(nk.index >= start_date) & (nk.index <= end_date)]
+        nk_closes = pd.to_numeric(nk[close_col], errors="coerce").dropna()
+        nk_equity = float(initial_capital) * nk_closes / float(nk_closes.iloc[0])
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=equity_df["date"],
+            y=equity_df["equity"],
+            name=f"ABCD戦略（{holding_days}日/{combo_choice}）",
+            line=dict(color="royalblue", width=2),
+            mode="lines",
+        ))
+        fig.add_trace(go.Scatter(
+            x=nk.index,
+            y=nk_equity,
+            name="日経225 Buy&Hold",
+            line=dict(color="orange", width=2, dash="dash"),
+            mode="lines",
+        ))
+        fig.update_layout(
+            height=420,
+            title="エクイティカーブ（定額スタイル vs 日経225）",
+            xaxis_title="日付",
+            yaxis_title="資産額（円）",
+            margin=dict(l=10, r=10, t=50, b=10),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # パターン別成績
+        if not trades_df.empty:
+            st.subheader("パターン別 成績")
+            pat_summary = (
+                trades_df.groupby("pattern")
+                .agg(
+                    取引数=("pnl", "size"),
+                    勝率=("pnl", lambda s: (s > 0).mean()),
+                    平均損益=("return_pct", "mean"),
+                    合計損益=("pnl", "sum"),
+                )
+                .reset_index()
+                .sort_values("合計損益", ascending=False)
+            )
+            pat_summary["勝率"] = pat_summary["勝率"].map("{:.1%}".format)
+            pat_summary["平均損益"] = pat_summary["平均損益"].map("{:+.2f}%".format)
+            pat_summary["合計損益"] = pat_summary["合計損益"].map("{:,.0f}円".format)
+            st.dataframe(pat_summary, use_container_width=True, hide_index=True)
+
+
+def show_style_optimizer_view():
+    st.title("📊 投資スタイル最適化")
+    st.markdown(
+        """
+        **ABCD戦略**を**短期・中期・長期**でバックテストし、過去3年間で
+        **日経225 Buy & Hold** を上回る投資スタイルを特定します。
+
+        | 条件 | 設定 |
+        |------|------|
+        | 投資スタイル | **定額スタイル**（初期資金を最大20銘柄に等分） |
+        | 最大同時保有 | **20銘柄** |
+        | リバランス | **週次**（毎週月曜日） |
+        | 売買コスト | **0.3%**（往復込み） |
+        | ベンチマーク | **日経225 Buy & Hold** |
+        """
+    )
+
+    base_dir = Path(__file__).resolve().parent
+    data_dir = base_dir / "data"
+    opt_csv = data_dir / "style_optimization.csv"
+    equity_csv = data_dir / "style_optimization_equity.csv"
+
+    # ① 事前計算済み結果の表示
+    if opt_csv.exists():
+        with st.expander("✅ 最適化済み結果（全シナリオ）", expanded=True):
+            _show_precomputed_results(opt_csv, equity_csv)
+    else:
+        st.warning(
+            "最適化結果CSVが見つかりません。以下のコマンドで全シナリオを実行してください:"
+        )
+        st.code("python batch/style_optimizer.py")
+        st.info(
+            "初回実行には20〜30分かかる場合があります。"
+            "実行後、ページをリロードすると結果が表示されます。"
+        )
+
+    # ② インタラクティブシミュレーション
+    st.divider()
+    st.subheader("🔧 カスタムシミュレーション（リアルタイム実行）")
+
+    bench_data = load_cached("^N225")
+    if bench_data is None:
+        st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
+        return
+
+    _show_custom_simulation(base_dir, bench_data)
+
+
+# ------------------------------------------------------------------
 # メイン
 # ------------------------------------------------------------------
 def main():
@@ -1058,13 +1857,19 @@ def main():
         show_detail_view()
         return
 
-    tab1, tab2 = st.tabs(["波形分類", "ABCD戦略"])
+    tab1, tab2, tab3, tab4 = st.tabs(["波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"])
 
     with tab1:
         show_list_view()
 
     with tab2:
         show_strategy_view()
+
+    with tab3:
+        show_backtest_view()
+
+    with tab4:
+        show_style_optimizer_view()
 
 
 if __name__ == "__main__":
