@@ -34,7 +34,15 @@ from config.settings import (
     DAILY_PICK_LOOKBACK,
 )
 from modules.chart_builder import build_chart, build_comparison_chart, build_financials_chart, build_index_chart
-from modules.data_fetcher import load_cached, load_stock_list, get_nikkei225, compute_sector_index, fetch_financials, compute_sector_stats
+from modules.data_fetcher import (
+    load_cached,
+    load_stock_list,
+    get_nikkei225,
+    compute_sector_index,
+    fetch_financials,
+    compute_sector_stats,
+    fetch_and_cache,
+)
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
 from modules.wave_classifier import compute_indicators, classify
 from modules.strategy_engine import generate_ranking
@@ -661,7 +669,12 @@ def show_detail_view():
     chart_type_key = "candlestick" if chart_type == "ローソク足" else "line"
 
     # データ読み込み & 選択された窓でリアルタイム再計算
+    # Cloudの最小デプロイでは data/cache/*.parquet を含めないため、
+    # キャッシュが無い場合は必要な銘柄のみオンデマンド取得する。
     df = load_cached(ticker)
+    if df is None:
+        with st.spinner("株価データを取得中..."):
+            df = fetch_and_cache(ticker)
     live_indicators = None
     if df is not None:
         live_indicators = compute_indicators(df, window=window)
@@ -855,6 +868,9 @@ def show_detail_view():
         # 選択された比較銘柄
         for comp_ticker in comparison_tickers:
             comp_df = load_cached(comp_ticker)
+            if comp_df is None:
+                with st.spinner(f"比較銘柄の株価データを取得中: {comp_ticker} ..."):
+                    comp_df = fetch_and_cache(comp_ticker)
             if comp_df is not None:
                 comp_row = results[results["ticker"] == comp_ticker].iloc[0] if results is not None else None
                 comp_label = f"{comp_row['code']} {comp_row['name']}" if comp_row is not None else comp_ticker
