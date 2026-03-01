@@ -135,6 +135,162 @@ def is_bullish_reversal_candle(open_: float, high: float, low: float,
 
 
 # ============================================================================
+# カップウィズハンドル 検出ヘルパー
+# ============================================================================
+
+def _detect_cup_with_handle(
+    close: pd.Series,
+    volume_ratio: pd.Series,
+    cfg: dict,
+) -> bool:
+    """カップウィズハンドル・ブレイクアウトを検出する。
+
+    アルゴリズム:
+      1. 本日終値 > ハンドル高値 (ブレイクアウト)
+      2. ハンドル深さ ≤ handle_depth_pct_le
+      3. 出来高比率 ≥ breakout_volume_ratio_ge
+      4. カップ深さ ∈ cup_depth_pct_between
+      5. カップ底が中央60%に存在（丸底判定）
+      6. ハンドル高値がカップ右縁から12%以内
+    """
+    cup_depth_min, cup_depth_max = cfg.get("cup_depth_pct_between", [0.12, 0.35])
+    cup_len_min, cup_len_max = cfg.get("cup_length_days_between", [35, 325])
+    handle_depth_max = cfg.get("handle_depth_pct_le", 0.12)
+    handle_len_min, handle_len_max = cfg.get("handle_length_days_between", [5, 25])
+    breakout_vol_min = cfg.get("breakout_volume_ratio_ge", 1.4)
+
+    n = len(close)
+    if n < cup_len_min + handle_len_min + 5:
+        return False
+
+    latest_close = float(close.iloc[-1])
+
+    # 出来高チェック（先に弾く）
+    latest_vr = float(volume_ratio.iloc[-1]) if pd.notna(volume_ratio.iloc[-1]) else 0.0
+    if latest_vr < breakout_vol_min:
+        return False
+
+    # ハンドル長を総当たり（短い方から）
+    for h_len in range(handle_len_min, handle_len_max + 1):
+        h_start = n - h_len - 1   # ハンドル開始インデックス
+        h_end = n - 1              # ハンドル終了（今日の前日まで）
+        if h_start < cup_len_min:
+            break
+
+        handle_close = close.iloc[h_start:h_end]
+        if len(handle_close) < handle_len_min:
+            continue
+
+        handle_high = float(handle_close.max())
+        handle_low = float(handle_close.min())
+
+        # ブレイクアウト: 本日終値 > ハンドル最高値
+        if latest_close <= handle_high:
+            continue
+
+        # ハンドル深さ
+        if handle_high <= 0 or (handle_high - handle_low) / handle_high > handle_depth_max:
+            continue
+
+        # カップ長を総当たり
+        for c_len in range(cup_len_min, min(cup_len_max, h_start) + 1):
+            c_start = h_start - c_len
+            if c_start < 0:
+                break
+
+            cup_close = close.iloc[c_start:h_start]
+
+            # カップ左縁・右縁（それぞれ端20%の最高値）
+            edge = max(1, c_len // 5)
+            left_rim = float(cup_close.iloc[:edge].max())
+            right_rim = float(cup_close.iloc[-edge:].max())
+            cup_rim = max(left_rim, right_rim)
+            if cup_rim <= 0:
+                continue
+
+            cup_low = float(cup_close.min())
+            cup_depth = (cup_rim - cup_low) / cup_rim
+
+            if not (cup_depth_min <= cup_depth <= cup_depth_max):
+                continue
+
+            # ハンドル開始値がカップ右縁に近い（12%以内）
+            if right_rim > 0 and (right_rim - handle_high) / right_rim > 0.12:
+                continue
+
+            # 丸底チェック: カップ底がカップ期間の中央60%に存在
+            cup_low_pos = float(np.argmin(cup_close.values)) / max(1, c_len)
+            if not (0.20 <= cup_low_pos <= 0.80):
+                continue
+
+            return True
+
+    return False
+
+
+# ============================================================================
+# EPS データ取得
+# ============================================================================
+
+def fetch_eps_data(ticker_str: str) -> dict:
+    """yfinance から四半期・年次 EPS を取得し、CAN-SLIM 判定用の指標を返す。
+
+    Returns:
+        {
+            "eps_qtr_yoy_growth": float | None,  # 直近四半期 EPS 前年同期比成長率
+            "eps_annual_growth_3y": list,         # 過去3年の年次 EPS 成長率（新→旧）
+            "ok": bool,
+        }
+    """
+    import yfinance as yf
+
+    result: dict = {"eps_qtr_yoy_growth": None, "eps_annual_growth_3y": [], "ok": False}
+    try:
+        t = yf.Ticker(ticker_str)
+
+        # ---- 四半期EPS 前年同期比 ----
+        q_stmt = t.quarterly_income_stmt
+        if q_stmt is not None and not q_stmt.empty:
+            eps_row = None
+            for idx in q_stmt.index:
+                idx_str = str(idx)
+                if "Basic EPS" in idx_str or "Diluted EPS" in idx_str:
+                    eps_row = q_stmt.loc[idx].dropna().sort_index(ascending=False)
+                    break
+            if eps_row is not None and len(eps_row) >= 5:
+                latest = float(eps_row.iloc[0])
+                year_ago = float(eps_row.iloc[4])
+                if year_ago != 0:
+                    result["eps_qtr_yoy_growth"] = (latest - year_ago) / abs(year_ago)
+
+        # ---- 年次EPS 成長率（直近3年分）----
+        a_stmt = t.income_stmt
+        if a_stmt is not None and not a_stmt.empty:
+            eps_row = None
+            for idx in a_stmt.index:
+                idx_str = str(idx)
+                if "Basic EPS" in idx_str or "Diluted EPS" in idx_str:
+                    eps_row = a_stmt.loc[idx].dropna().sort_index(ascending=False)
+                    break
+            if eps_row is not None and len(eps_row) >= 4:
+                annual_growth = []
+                for i in range(min(3, len(eps_row) - 1)):
+                    cur = float(eps_row.iloc[i])
+                    prev = float(eps_row.iloc[i + 1])
+                    if prev != 0:
+                        annual_growth.append((cur - prev) / abs(prev))
+                    else:
+                        annual_growth.append(None)
+                result["eps_annual_growth_3y"] = annual_growth
+
+        result["ok"] = True
+    except Exception as e:
+        logger.debug(f"EPS取得エラー ({ticker_str}): {e}")
+
+    return result
+
+
+# ============================================================================
 # パターン判定 (A/B/C/D)
 # ============================================================================
 
@@ -332,16 +488,77 @@ def check_pattern_D(features: dict[str, pd.Series],
     return True
 
 
+def check_pattern_E(
+    features: dict[str, pd.Series],
+    pattern_cfg: dict,
+    eps_data: dict | None = None,
+) -> bool:
+    """E_can_slim: CAN-SLIM (業績成長 × カップウィズハンドル・ブレイクアウト)
+
+    C: 直近四半期 EPS 前年同期比 ≥ 25%
+    A: 過去3年の年次 EPS が毎年 ≥ 25% 成長
+    N: カップウィズハンドル・ブレイクアウト
+    """
+    close = features["close"]
+    volume_ratio = features.get("volume_ratio")
+
+    if volume_ratio is None or len(close) < 50:
+        return False
+
+    entry = pattern_cfg.get("entry", [])
+
+    # --- C: 直近四半期 EPS 前年同期比 ---
+    qtr_threshold = 0.25
+    for cond in entry:
+        if isinstance(cond, dict) and "eps_qtr_yoy_growth_ge" in cond:
+            qtr_threshold = cond["eps_qtr_yoy_growth_ge"]
+
+    # --- A: 過去3年 年次EPS 成長率 ---
+    annual_threshold = 0.25
+    for cond in entry:
+        if isinstance(cond, dict) and "eps_annual_growth_3y_ge" in cond:
+            annual_threshold = cond["eps_annual_growth_3y_ge"]
+
+    if eps_data is not None and eps_data.get("ok"):
+        # C: 四半期EPS — None の場合は日本株でデータ未取得のためスキップ
+        qtr_growth = eps_data.get("eps_qtr_yoy_growth")
+        if qtr_growth is not None and qtr_growth < qtr_threshold:
+            return False
+
+        # A: 年次EPS 3年連続成長
+        annual_growths = eps_data.get("eps_annual_growth_3y", [])
+        if len(annual_growths) < 3:
+            return False
+        if not all(g is not None and g >= annual_threshold for g in annual_growths[:3]):
+            return False
+    else:
+        # EPS データなし → 業績条件スキップ（チャートのみ評価）
+        logger.debug("E_can_slim: EPS データなし。チャートパターンのみ判定。")
+
+    # --- N: カップウィズハンドル ---
+    cup_handle_cfg: dict = {}
+    for cond in entry:
+        if isinstance(cond, dict) and "cup_handle_breakout" in cond:
+            cup_handle_cfg = cond["cup_handle_breakout"]
+            break
+
+    return _detect_cup_with_handle(close, volume_ratio, cup_handle_cfg)
+
+
 _PATTERN_CHECKERS = {
     "A_trend": check_pattern_A,
     "B_pullback": check_pattern_B,
     "C_breakout": check_pattern_C,
     "D_reversal": check_pattern_D,
+    "E_can_slim": check_pattern_E,
 }
 
 
-def detect_patterns(features: dict[str, pd.Series],
-                    strategy: dict | None = None) -> list[str]:
+def detect_patterns(
+    features: dict[str, pd.Series],
+    strategy: dict | None = None,
+    eps_data: dict | None = None,
+) -> list[str]:
     """全パターンをチェックし、成立したパターン名リストを返す。"""
     s = strategy or load_strategy()
     patterns_cfg = get_patterns(s)
@@ -353,6 +570,8 @@ def detect_patterns(features: dict[str, pd.Series],
         try:
             if pat_name == "D_reversal":
                 result = checker(features, cfg, s)
+            elif pat_name == "E_can_slim":
+                result = checker(features, cfg, eps_data)
             else:
                 result = checker(features, cfg)
             if result:
@@ -482,7 +701,8 @@ def compute_score(pattern: str,
 def evaluate_single(ticker: str, df: pd.DataFrame,
                     turnover_rank_pct: float,
                     is_etf: bool = False,
-                    strategy: dict | None = None) -> dict[str, Any] | None:
+                    strategy: dict | None = None,
+                    eps_data: dict | None = None) -> dict[str, Any] | None:
     """1銘柄に対してパターン判定 + スコアリングを実行する。
 
     Returns:
@@ -502,7 +722,7 @@ def evaluate_single(ticker: str, df: pd.DataFrame,
         return None
 
     features = compute_all_features(df, s)
-    matched = detect_patterns(features, s)
+    matched = detect_patterns(features, s, eps_data)
 
     if not matched:
         return None
@@ -543,7 +763,8 @@ def evaluate_single(ticker: str, df: pd.DataFrame,
 def generate_ranking(stock_list: pd.DataFrame,
                      load_cached_fn,
                      strategy: dict | None = None,
-                     max_positions: int | None = None) -> pd.DataFrame:
+                     max_positions: int | None = None,
+                     eps_data_map: dict[str, dict] | None = None) -> pd.DataFrame:
     """全銘柄を評価し、スコア順にランキングを生成する。
 
     Args:
@@ -551,6 +772,8 @@ def generate_ranking(stock_list: pd.DataFrame,
         load_cached_fn: ticker → DataFrame を返す関数
         strategy: strategy辞書
         max_positions: 上位N件に絞る（None=全件）
+        eps_data_map: {ticker: fetch_eps_data(ticker) の戻り値} の辞書。
+                      E_can_slim の業績条件チェックに使用。None の場合は業績条件スキップ。
 
     Returns:
         ランキング DataFrame
@@ -589,7 +812,8 @@ def generate_ranking(stock_list: pd.DataFrame,
         is_etf = str(row.get("size_category", "")).upper() == "ETF"
         rank_pct = turnover_rank.get(ticker, 50.0)
 
-        eval_result = evaluate_single(ticker, df, rank_pct, is_etf, s)
+        ticker_eps = eps_data_map.get(ticker) if eps_data_map else None
+        eval_result = evaluate_single(ticker, df, rank_pct, is_etf, s, ticker_eps)
         if eval_result is None:
             continue
 

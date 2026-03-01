@@ -50,6 +50,9 @@ features:
     ma_period: 20
   turnover:
     window_days: 20              # turnover_jpy = close * volume
+  eps:
+    source: earnings_dates_csv   # data/earnings/earnings_dates.csv
+    fields: [eps_actual, eps_yoy_growth, eps_annual_growth_3y]
 
 # ---------------------------------------------------------------------------
 # 売買執行
@@ -120,6 +123,23 @@ patterns:
       - bullish_reversal_candle: true
     notes: "急落後の反発（難易度高いので控えめ）"
 
+  # E：CAN-SLIM（業績成長 × カップウィズハンドル・ブレイクアウト）
+  E_can_slim:
+    entry:
+      # C：直近四半期 EPS が前年同期比 +25% 以上
+      - eps_qtr_yoy_growth_ge: 0.25
+      # A：過去 3 年間の年次 EPS が毎年 +25% 以上
+      - eps_annual_growth_3y_ge: 0.25
+      # N：カップウィズハンドル・ブレイクアウト
+      - cup_handle_breakout:
+          cup_depth_pct_between: [0.12, 0.35]    # 高値からの調整幅 12〜35%
+          cup_length_days_between: [35, 325]      # カップ形成日数（7〜65 週相当）
+          handle_depth_pct_le: 0.12              # ハンドル調整幅：カップ縁から 12% 以内
+          handle_length_days_between: [5, 25]    # ハンドル形成日数（1〜5 週相当）
+          breakout_volume_ratio_ge: 1.4          # ブレイクアウト時出来高倍率（平均比 1.4 倍以上）
+          breakout_above_handle_high: true       # ハンドル高値を終値で上抜け
+    notes: "CAN-SLIM: 業績成長(C×A) + カップウィズハンドル・ブレイクアウト(N)"
+
 # ---------------------------------------------------------------------------
 # ローソク足パターン定義
 # ---------------------------------------------------------------------------
@@ -142,6 +162,7 @@ scoring:
     B_pullback: 28
     C_breakout: 25
     D_reversal: 10
+    E_can_slim: 35
 
   # 補正（強さ係数） = base × Π(multiplier)
   multipliers:
@@ -176,6 +197,7 @@ scoring:
     B_pullback: [turnover_rank, atr_percent]
     C_breakout: [turnover_rank, atr_percent, volume_ratio]
     D_reversal: [turnover_rank, atr_percent]
+    E_can_slim: [turnover_rank, atr_percent, volume_ratio]
 
   # ETF用オーバーライド
   instrument_overrides:

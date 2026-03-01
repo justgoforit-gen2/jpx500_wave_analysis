@@ -49,6 +49,16 @@ from modules.strategy_engine import generate_ranking
 from modules.strategy_loader import load_strategy
 from modules.backtester import build_contexts, run_backtest
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_price_data_cached(ticker: str) -> pd.DataFrame | None:
+    return fetch_and_cache(ticker)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _get_financials_cached(ticker: str) -> pd.DataFrame | None:
+    return fetch_financials(ticker)
+
 st.set_page_config(
     page_title="JPX500 波形分類",
     page_icon="📈",
@@ -674,7 +684,7 @@ def show_detail_view():
     df = load_cached(ticker)
     if df is None:
         with st.spinner("株価データを取得中..."):
-            df = fetch_and_cache(ticker)
+            df = _get_price_data_cached(ticker)
     live_indicators = None
     if df is not None:
         live_indicators = compute_indicators(df, window=window)
@@ -761,7 +771,7 @@ def show_detail_view():
     st.markdown("---")
     st.markdown("#### 業績")
     with st.spinner("財務データを取得中..."):
-        financials = fetch_financials(ticker)
+        financials = _get_financials_cached(ticker)
     if financials is not None and len(financials) > 0:
         fig_fin = build_financials_chart(financials)
         st.plotly_chart(fig_fin, use_container_width=True)
@@ -870,7 +880,7 @@ def show_detail_view():
             comp_df = load_cached(comp_ticker)
             if comp_df is None:
                 with st.spinner(f"比較銘柄の株価データを取得中: {comp_ticker} ..."):
-                    comp_df = fetch_and_cache(comp_ticker)
+                    comp_df = _get_price_data_cached(comp_ticker)
             if comp_df is not None:
                 comp_row = results[results["ticker"] == comp_ticker].iloc[0] if results is not None else None
                 comp_label = f"{comp_row['code']} {comp_row['name']}" if comp_row is not None else comp_ticker
@@ -924,6 +934,7 @@ PATTERN_LABELS = {
     "B_pullback": "B: 押し目",
     "C_breakout": "C: ブレイクアウト",
     "D_reversal": "D: リバーサル",
+    "E_can_slim": "E: CAN-SLIM",
 }
 
 
@@ -1026,7 +1037,7 @@ def show_strategy_view():
 
     # サマリーカード
     st.markdown("### シグナル集計")
-    pat_cols = st.columns(4)
+    pat_cols = st.columns(len(PATTERN_LABELS))
     for i, (pat_key, pat_label) in enumerate(PATTERN_LABELS.items()):
         count = ranking["matched_patterns"].apply(
             lambda x, _p=pat_key: _p in str(x)
@@ -1428,13 +1439,16 @@ import numpy as np  # noqa: E402  (already available via plotly deps)
 
 
 _STYLE_OPTIMIZER_PATTERNS: dict[str, set[str]] = {
-    "全(A+B+C+D)":  {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
-    "A+B+C":        {"A_trend", "B_pullback", "C_breakout"},
-    "A+B":          {"A_trend", "B_pullback"},
-    "A+C":          {"A_trend", "C_breakout"},
-    "B+C":          {"B_pullback", "C_breakout"},
-    "Aのみ":        {"A_trend"},
-    "Cのみ":        {"C_breakout"},
+    "全(A+B+C+D)":   {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
+    "全(A+B+C+D+E)": {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim"},
+    "A+B+C":         {"A_trend", "B_pullback", "C_breakout"},
+    "A+B+C+E":       {"A_trend", "B_pullback", "C_breakout", "E_can_slim"},
+    "A+B":           {"A_trend", "B_pullback"},
+    "A+C":           {"A_trend", "C_breakout"},
+    "B+C":           {"B_pullback", "C_breakout"},
+    "Aのみ":         {"A_trend"},
+    "Cのみ":         {"C_breakout"},
+    "Eのみ":         {"E_can_slim"},
 }
 
 _STYLE_HOLDING_DAYS = {

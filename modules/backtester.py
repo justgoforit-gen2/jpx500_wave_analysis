@@ -45,6 +45,87 @@ def _rolling_atr_pct_rank_le(atr_pct: pd.Series, window: int) -> pd.Series:
     return pd.Series(out, index=atr_pct.index)
 
 
+def _compute_cup_handle_signal(
+    close: pd.Series,
+    volume_ratio: pd.Series,
+    cfg: dict,
+) -> pd.Series:
+    """Rolling cup-with-handle breakout signal (numpy ベクトル化)。
+
+    各日 t について、直近データを使ってカップウィズハンドル・ブレイクアウトが
+    成立しているかを判定し、bool Series として返す。
+
+    早期リターン（出来高比率フィルタ）により、候補日を大幅に絞り込む。
+    """
+    cup_depth_min, cup_depth_max = cfg.get("cup_depth_pct_between", [0.12, 0.35])
+    cup_len_min, cup_len_max = cfg.get("cup_length_days_between", [35, 325])
+    handle_depth_max = cfg.get("handle_depth_pct_le", 0.12)
+    handle_len_min, handle_len_max = cfg.get("handle_length_days_between", [5, 25])
+    breakout_vol_min = cfg.get("breakout_volume_ratio_ge", 1.4)
+
+    c = close.to_numpy(dtype=float, copy=False)
+    vr = volume_ratio.to_numpy(dtype=float, copy=False)
+    n = len(c)
+    out = np.zeros(n, dtype=bool)
+    min_len = cup_len_min + handle_len_min + 2
+
+    for t in range(min_len, n):
+        # 出来高フィルタで早期リターン（最も効く絞り込み）
+        if np.isnan(vr[t]) or vr[t] < breakout_vol_min:
+            continue
+        ct = c[t]
+        if np.isnan(ct):
+            continue
+
+        found = False
+        for h_len in range(handle_len_min, handle_len_max + 1):
+            hs = t - h_len          # ハンドル開始（inclusive）
+            if hs < cup_len_min:
+                break
+            handle = c[hs:t]
+            if len(handle) < handle_len_min:
+                continue
+            h_max = float(np.nanmax(handle))
+            h_min = float(np.nanmin(handle))
+
+            # ブレイクアウト: 本日終値 > ハンドル最高値
+            if ct <= h_max or h_max <= 0:
+                continue
+            # ハンドル深さ ≤ 12%
+            if (h_max - h_min) / h_max > handle_depth_max:
+                continue
+
+            for c_len in range(cup_len_min, min(cup_len_max, hs) + 1):
+                cs = hs - c_len
+                if cs < 0:
+                    break
+                cup = c[cs:hs]
+                edge = max(1, c_len // 5)
+                left_rim = float(np.nanmax(cup[:edge]))
+                right_rim = float(np.nanmax(cup[-edge:]))
+                cup_rim = max(left_rim, right_rim)
+                if cup_rim <= 0:
+                    continue
+                cup_low = float(np.nanmin(cup))
+                depth = (cup_rim - cup_low) / cup_rim
+                if not (cup_depth_min <= depth <= cup_depth_max):
+                    continue
+                # ハンドル高値がカップ右縁から 12% 以内
+                if right_rim > 0 and (right_rim - h_max) / right_rim > 0.12:
+                    continue
+                # 丸底: カップ底がカップ期間の中央 60% に存在
+                low_pos = float(np.argmin(cup)) / max(1, c_len - 1)
+                if not (0.20 <= low_pos <= 0.80):
+                    continue
+                found = True
+                break
+            if found:
+                break
+        out[t] = found
+
+    return pd.Series(out, index=close.index)
+
+
 def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str, pd.Series]:
     patterns_cfg = get_patterns(strategy)
     signals: dict[str, pd.Series] = {}
@@ -165,6 +246,18 @@ def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str,
         )
         signals["D_reversal"] = d.fillna(False)
 
+    # --- E_can_slim ---
+    e_cfg = patterns_cfg.get("E_can_slim", {})
+    volume_ratio_e = features.get("volume_ratio")
+    if volume_ratio_e is not None:
+        cup_handle_cfg: dict = {}
+        for cond in e_cfg.get("entry", []):
+            if isinstance(cond, dict) and "cup_handle_breakout" in cond:
+                cup_handle_cfg = cond["cup_handle_breakout"]
+                break
+        e = _compute_cup_handle_signal(close, volume_ratio_e, cup_handle_cfg)
+        signals["E_can_slim"] = e.fillna(False)
+
     return signals
 
 
@@ -268,7 +361,16 @@ def build_contexts(
     strategy: dict,
     end_date: pd.Timestamp | None = None,
     limit: int | None = None,
+    eps_eligible: set[str] | None = None,
 ) -> list[TickerContext]:
+    """TickerContext リストを構築する。
+
+    Args:
+        eps_eligible: EPS 条件（C・A）を満たす ticker の集合。
+                      指定した場合、集合に含まれない ticker の E_can_slim
+                      シグナルをすべて False に上書きする。
+                      None の場合はチャートパターンのみで判定（EPS スキップ）。
+    """
     contexts: list[TickerContext] = []
     for _, row in stock_list_df.iterrows():
         if limit is not None and len(contexts) >= limit:
@@ -287,6 +389,12 @@ def build_contexts(
 
         features = compute_all_features(df, strategy)
         signals = compute_signals(features, strategy)
+
+        # EPS フィルタ: 対象外 ticker の E シグナルを無効化
+        if eps_eligible is not None and ticker not in eps_eligible:
+            if "E_can_slim" in signals:
+                signals["E_can_slim"] = pd.Series(False, index=signals["E_can_slim"].index)
+
         is_etf = str(row.get("size_category", "")).upper() == "ETF"
         contexts.append(
             TickerContext(
