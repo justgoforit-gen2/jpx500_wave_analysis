@@ -42,6 +42,9 @@ from modules.data_fetcher import (
     fetch_financials,
     compute_sector_stats,
     fetch_and_cache,
+    GLOBAL_INDICES,
+    get_global_index,
+    convert_ohlcv_close_to_jpy_by_month_avg,
 )
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
 from modules.wave_classifier import compute_indicators, classify
@@ -345,16 +348,29 @@ def show_list_view():
     # --- マーケット概況 ---
     st.markdown("---")
     st.markdown("### マーケット概況")
-    mkt_col1, mkt_col2 = st.columns(2)
+
+    mkt_col1, mkt_col2, mkt_col3 = st.columns(3)
     with mkt_col1:
+        st.markdown("**国内指数**")
         show_nikkei225 = st.checkbox("日経225", value=True, key="mkt_nikkei")
     with mkt_col2:
+        st.markdown("**33業種指数（複数可）**")
         sector_list = sorted(results["sector_33"].dropna().unique().tolist()) if "sector_33" in results.columns else []
-        selected_mkt_sector = st.selectbox(
-            "33業種指数",
-            options=["（なし）"] + sector_list,
-            index=0,
-            key="mkt_sector",
+        selected_mkt_sectors = st.multiselect(
+            "33業種を選択",
+            options=sector_list,
+            default=[],
+            key="mkt_sectors",
+            label_visibility="collapsed",
+        )
+    with mkt_col3:
+        st.markdown("**海外指数（複数可）**")
+        selected_global_names = st.multiselect(
+            "海外指数を選択",
+            options=list(GLOBAL_INDICES.values()),
+            default=[],
+            key="mkt_global",
+            label_visibility="collapsed",
         )
 
     mkt_period_labels = {60: "60日", 120: "120日", 180: "180日", 260: "1年", 520: "2年", 0: "全期間"}
@@ -367,15 +383,63 @@ def show_list_view():
         key="mkt_window",
     )
 
+    fx_jpy_mode = st.checkbox(
+        "円換算（為替: 各月の平均レート）",
+        value=False,
+        key="mkt_fx_jpy_mode",
+    )
+
+    _SECTOR_COLORS = ["#E91E63", "#00BCD4", "#FF9800", "#8BC34A", "#9C27B0",
+                      "#795548", "#FF5722", "#03A9F4", "#607D8B", "#CDDC39"]
+    _GLOBAL_COLORS = {
+        "^DJI":      "#FF5722",
+        "^GSPC":     "#FF9800",
+        "^GDAXI":    "#4CAF50",
+        "^STOXX50E": "#009688",
+        "^KS11":     "#F48FB1",
+        "^NDX":      "#3F51B5",
+        "^HSI":      "#F44336",
+        "000300.SS": "#C2185B",
+        "^NSEI":     "#9C27B0",
+        "^AXJO":     "#795548",
+    }
+    _GLOBAL_TICKER_TO_CCY = {
+        "^DJI": "USD",
+        "^GSPC": "USD",
+        "^NDX": "USD",
+        "^GDAXI": "EUR",
+        "^STOXX50E": "EUR",
+        "^KS11": "KRW",
+        "^HSI": "HKD",
+        "000300.SS": "CNY",
+        "^NSEI": "INR",
+        "^AXJO": "AUD",
+    }
+    _GLOBAL_NAME_TO_TICKER = {v: k for k, v in GLOBAL_INDICES.items()}
+
     mkt_indices = []
     if show_nikkei225:
         nk_data = get_nikkei225()
         if nk_data is not None:
             mkt_indices.append({"name": "日経225", "data": nk_data, "color": "#1976d2"})
-    if selected_mkt_sector and selected_mkt_sector != "（なし）":
-        sec_data = compute_sector_index(selected_mkt_sector, results)
+
+    for i, sector in enumerate(selected_mkt_sectors):
+        sec_data = compute_sector_index(sector, results)
         if sec_data is not None:
-            mkt_indices.append({"name": f"33業種: {selected_mkt_sector}", "data": sec_data, "color": "#E91E63"})
+            color = _SECTOR_COLORS[i % len(_SECTOR_COLORS)]
+            mkt_indices.append({"name": f"33業種: {sector}", "data": sec_data, "color": color})
+
+    for gname in selected_global_names:
+        gticker = _GLOBAL_NAME_TO_TICKER.get(gname)
+        if gticker:
+            gdata = _get_price_data_cached(gticker)
+            if gdata is not None:
+                if fx_jpy_mode:
+                    ccy = _GLOBAL_TICKER_TO_CCY.get(gticker)
+                    if ccy:
+                        gdata = convert_ohlcv_close_to_jpy_by_month_avg(gdata, ccy)
+                color = _GLOBAL_COLORS.get(gticker, "#607D8B")
+                mkt_indices.append({"name": gname, "data": gdata, "color": color})
 
     if mkt_indices:
         fig_mkt = build_index_chart(mkt_indices, window=mkt_period_sel)
@@ -935,6 +999,7 @@ PATTERN_LABELS = {
     "C_breakout": "C: ブレイクアウト",
     "D_reversal": "D: リバーサル",
     "E_can_slim": "E: CAN-SLIM",
+    "F_turnaround": "F: ターンアラウンド",
 }
 
 
@@ -1439,16 +1504,19 @@ import numpy as np  # noqa: E402  (already available via plotly deps)
 
 
 _STYLE_OPTIMIZER_PATTERNS: dict[str, set[str]] = {
-    "全(A+B+C+D)":   {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
-    "全(A+B+C+D+E)": {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim"},
-    "A+B+C":         {"A_trend", "B_pullback", "C_breakout"},
-    "A+B+C+E":       {"A_trend", "B_pullback", "C_breakout", "E_can_slim"},
-    "A+B":           {"A_trend", "B_pullback"},
-    "A+C":           {"A_trend", "C_breakout"},
-    "B+C":           {"B_pullback", "C_breakout"},
-    "Aのみ":         {"A_trend"},
-    "Cのみ":         {"C_breakout"},
-    "Eのみ":         {"E_can_slim"},
+    "全(A+B+C+D)":     {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
+    "全(A+B+C+D+E)":   {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim"},
+    "全(A+B+C+D+E+F)": {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim", "F_turnaround"},
+    "A+B+C":           {"A_trend", "B_pullback", "C_breakout"},
+    "A+B+C+E":         {"A_trend", "B_pullback", "C_breakout", "E_can_slim"},
+    "A+B+C+F":         {"A_trend", "B_pullback", "C_breakout", "F_turnaround"},
+    "A+B":             {"A_trend", "B_pullback"},
+    "A+C":             {"A_trend", "C_breakout"},
+    "B+C":             {"B_pullback", "C_breakout"},
+    "Aのみ":           {"A_trend"},
+    "Cのみ":           {"C_breakout"},
+    "Eのみ":           {"E_can_slim"},
+    "Fのみ":           {"F_turnaround"},
 }
 
 _STYLE_HOLDING_DAYS = {
@@ -1458,13 +1526,24 @@ _STYLE_HOLDING_DAYS = {
 }
 
 
+def _nikkei_cache_signature() -> str:
+    """^N225 キャッシュ更新に追従して cache_resource を更新するためのシグネチャ"""
+    try:
+        fp = CACHE_DIR / "^N225.parquet"
+        if fp.exists():
+            return str(fp.stat().st_mtime_ns)
+    except Exception:
+        pass
+    return "missing"
+
+
 @st.cache_resource(show_spinner="銘柄データを読み込み中（初回のみ時間がかかります）...")
-def _load_optimizer_contexts():
+def _load_optimizer_contexts(_bench_sig: str):
     """コンテキストをキャッシュ（1アプリ起動につき1回だけ構築）"""
     base_dir = Path(__file__).resolve().parent
     strategy = load_strategy(base_dir / "config" / "strategy.yaml")
     stock_list_df = load_stock_list()
-    bench = load_cached("^N225")
+    bench = get_nikkei225()
     if bench is None or len(bench) < 250:
         return None, None, None, None, None
     bench = bench.copy()
@@ -1711,7 +1790,7 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
             return
 
         with st.spinner("シミュレーション実行中...（初回はコンテキスト構築に時間がかかります）"):
-            contexts, strategy, trading_days, end_date, bench = _load_optimizer_contexts()
+            contexts, strategy, trading_days, end_date, bench = _load_optimizer_contexts(_nikkei_cache_signature())
 
         if contexts is None:
             st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
@@ -1867,7 +1946,7 @@ def show_style_optimizer_view():
     st.divider()
     st.subheader("🔧 カスタムシミュレーション（リアルタイム実行）")
 
-    bench_data = load_cached("^N225")
+    bench_data = get_nikkei225()
     if bench_data is None:
         st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
         return

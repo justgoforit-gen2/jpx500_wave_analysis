@@ -545,12 +545,87 @@ def check_pattern_E(
     return _detect_cup_with_handle(close, volume_ratio, cup_handle_cfg)
 
 
+def check_pattern_F(features: dict[str, pd.Series],
+                    pattern_cfg: dict) -> bool:
+    """F_turnaround: ターンアラウンド（底打ち転換）
+
+    長期下落トレンド（close < SMA200）にあった銘柄が、
+    短期的にSMA50を上抜けしてRSIが回復中の局面を捉える。
+
+    条件:
+      1. close < SMA200  : 長期下落トレンド圏
+      2. close > SMA50   : 短期的に上向き転換（SMA50上抜け）
+      3. RSI between [40, 65]: 売られすぎから回復中
+      4. 52週高値からの下落 >= 20%（十分な押し込みがある）
+      5. 直近5日リターン > 0（底打ちモメンタム確認）
+    """
+    close = features["close"]
+    high = features["high"]
+    sma_50 = features.get("sma_50")
+    sma_200 = features.get("sma_200")
+    rsi = features.get("rsi")
+
+    if sma_50 is None or sma_200 is None or rsi is None:
+        return False
+    if len(close) < 200:
+        return False
+
+    latest_close = float(close.iloc[-1])
+    sma50_val = float(sma_50.iloc[-1])
+    sma200_val = float(sma_200.iloc[-1])
+    rsi_val = float(rsi.iloc[-1])
+
+    if pd.isna(sma50_val) or pd.isna(sma200_val) or pd.isna(rsi_val):
+        return False
+
+    # 1. 長期下落トレンド: close < SMA200
+    if latest_close >= sma200_val:
+        return False
+
+    # 2. 短期転換: close > SMA50
+    if latest_close <= sma50_val:
+        return False
+
+    # 3. RSI回復中
+    rsi_range = [40, 65]
+    for cond in pattern_cfg.get("entry", []):
+        if isinstance(cond, dict) and "rsi_between" in cond:
+            rsi_range = cond["rsi_between"]
+    if not (rsi_range[0] <= rsi_val <= rsi_range[1]):
+        return False
+
+    # 4. 52週高値からN%以上の下落
+    lookback_days = min(252, len(high))
+    week52_high = float(high.iloc[-lookback_days:].max())
+    if week52_high <= 0:
+        return False
+    decline = (week52_high - latest_close) / week52_high
+    min_decline = 0.20
+    for cond in pattern_cfg.get("entry", []):
+        if isinstance(cond, dict) and "decline_from_52w_high_ge" in cond:
+            min_decline = cond["decline_from_52w_high_ge"]
+    if decline < min_decline:
+        return False
+
+    # 5. 直近5日のモメンタムがプラス
+    if len(close) < 6:
+        return False
+    price_5d_ago = float(close.iloc[-6])
+    if price_5d_ago <= 0:
+        return False
+    if (latest_close - price_5d_ago) / price_5d_ago <= 0:
+        return False
+
+    return True
+
+
 _PATTERN_CHECKERS = {
     "A_trend": check_pattern_A,
     "B_pullback": check_pattern_B,
     "C_breakout": check_pattern_C,
     "D_reversal": check_pattern_D,
     "E_can_slim": check_pattern_E,
+    "F_turnaround": check_pattern_F,
 }
 
 

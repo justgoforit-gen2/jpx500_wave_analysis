@@ -19,6 +19,122 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 
+def _close_series(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    if "Close" in df.columns:
+        return pd.to_numeric(df["Close"], errors="coerce")
+    if "close" in df.columns:
+        return pd.to_numeric(df["close"], errors="coerce")
+    # 最後の手段: 数値列の先頭
+    for col in df.columns:
+        s = pd.to_numeric(df[col], errors="coerce")
+        if s.notna().any():
+            return s
+    return pd.Series(dtype=float)
+
+
+def _fetch_fx_pair(pair: str) -> pd.Series | None:
+    """FXペア（例: 'EURJPY=X'）の日次終値Seriesを返す"""
+    df = fetch_and_cache(pair)
+    if df is None or df.empty:
+        return None
+    s = _close_series(df)
+    if s.empty:
+        return None
+    s = s.dropna()
+    s.index = pd.to_datetime(s.index)
+    s.sort_index(inplace=True)
+    return s
+
+
+def get_fx_to_jpy_daily(currency: str) -> pd.Series | None:
+    """通貨(currency)の 1単位あたりJPYレート（日次）を返す
+
+    例: currency='USD' -> USDJPY（日次、JPY/USD）
+    """
+    ccy = (currency or "").upper()
+    if ccy in ("JPY", ""):
+        return None
+
+    # USDJPY は yfinance では "JPY=X" が一般的
+    if ccy == "USD":
+        return _fetch_fx_pair("JPY=X")
+
+    # 1) 直接ペア: CCYJPY
+    direct = _fetch_fx_pair(f"{ccy}JPY=X")
+    if direct is not None and not direct.empty:
+        return direct
+
+    # 2) CCYUSD * USDJPY
+    usdjpy = _fetch_fx_pair("JPY=X")
+    if usdjpy is None or usdjpy.empty:
+        return None
+
+    ccyusd = _fetch_fx_pair(f"{ccy}USD=X")
+    if ccyusd is not None and not ccyusd.empty:
+        joined = pd.concat([ccyusd.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1).dropna()
+        if joined.empty:
+            return None
+        return (joined["ccyusd"] * joined["usdjpy"]).rename(f"{ccy}JPY")
+
+    # 3) 逆ペア: USDCCY を反転して USD/CCY を作る -> * USDJPY
+    usdccy = _fetch_fx_pair(f"USD{ccy}=X")
+    if usdccy is not None and not usdccy.empty:
+        inv = (1.0 / usdccy.replace(0, pd.NA)).dropna()
+        joined = pd.concat([inv.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1).dropna()
+        if joined.empty:
+            return None
+        return (joined["ccyusd"] * joined["usdjpy"]).rename(f"{ccy}JPY")
+
+    return None
+
+
+def get_fx_to_jpy_monthly_avg(currency: str) -> pd.Series | None:
+    """通貨(currency)の 1単位あたりJPYレート（月平均）を返す（indexは月末）"""
+    daily = get_fx_to_jpy_daily(currency)
+    if daily is None or daily.empty:
+        return None
+    monthly = daily.resample("ME").mean().dropna()
+    monthly.name = f"{currency.upper()}JPY_MA"
+    return monthly
+
+
+def convert_ohlcv_close_to_jpy_by_month_avg(df: pd.DataFrame, currency: str) -> pd.DataFrame:
+    """OHLCVのCloseを、月平均為替でJPY換算して返す（元のdfは変更しない）"""
+    ccy = (currency or "").upper()
+    if df is None or df.empty or ccy in ("JPY", ""):
+        return df
+
+    fx_m = get_fx_to_jpy_monthly_avg(ccy)
+    if fx_m is None or fx_m.empty:
+        return df
+
+    out = df.copy()
+    out.index = pd.to_datetime(out.index)
+    out.sort_index(inplace=True)
+
+    close = _close_series(out)
+    if close.empty:
+        return df
+
+    # 月キー（YYYY-MM）で月平均FXを当てる（timestampの時刻ズレを避ける）
+    fx_m2 = fx_m.copy()
+    fx_m2.index = fx_m2.index.to_period("M")
+    month_key = out.index.to_period("M")
+    fx_for_days = fx_m2.reindex(month_key).ffill().bfill().to_numpy()
+
+    if "Close" in out.columns:
+        out["Close"] = pd.to_numeric(out["Close"], errors="coerce").to_numpy() * fx_for_days
+    elif "close" in out.columns:
+        out["close"] = pd.to_numeric(out["close"], errors="coerce").to_numpy() * fx_for_days
+    else:
+        # Close列が無い場合は作成（チャート用途）
+        out["Close"] = close.to_numpy() * fx_for_days
+
+    return out
+
+
 def load_stock_list() -> pd.DataFrame:
     """銘柄リストCSVを読み込む"""
     return pd.read_csv(STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str})
@@ -151,10 +267,32 @@ def load_cached(ticker: str) -> pd.DataFrame | None:
 
 def get_nikkei225() -> pd.DataFrame | None:
     """日経225（^N225）のデータを取得する（キャッシュ優先）"""
-    cached = load_cached("^N225")
+    # キャッシュが存在しても、差分更新(fetch_and_cache)を必ず試みる。
+    # 以前は cache があると更新しないため、古い日付で止まり続けることがあった。
+    return fetch_and_cache("^N225")
+
+
+# 海外主要指数マスタ: {ticker: 表示名}
+GLOBAL_INDICES: dict[str, str] = {
+    "^DJI":      "ダウ平均",
+    "^GSPC":     "S&P500",
+    "^GDAXI":    "DAX",
+    "^STOXX50E": "Euro Stoxx50",
+    "^KS11":     "KOSPI",
+    "^NDX":      "Nasdaq100",
+    "^HSI":      "ハンセン指数",
+    "000300.SS": "CSI300",
+    "^NSEI":     "Nifty50",
+    "^AXJO":     "ASX200",
+}
+
+
+def get_global_index(ticker: str) -> pd.DataFrame | None:
+    """海外指数のデータを取得する（キャッシュ優先）"""
+    cached = load_cached(ticker)
     if cached is not None:
         return cached
-    return fetch_and_cache("^N225")
+    return fetch_and_cache(ticker)
 
 
 def fetch_financials(ticker: str) -> pd.DataFrame | None:

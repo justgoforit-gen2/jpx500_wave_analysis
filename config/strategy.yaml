@@ -140,6 +140,21 @@ patterns:
           breakout_above_handle_high: true       # ハンドル高値を終値で上抜け
     notes: "CAN-SLIM: 業績成長(C×A) + カップウィズハンドル・ブレイクアウト(N)"
 
+  # F：ターンアラウンド（底打ち転換）
+  F_turnaround:
+    entry:
+      # 長期下落トレンド圏（close < SMA200）
+      - close_lt_sma: 200
+      # 短期的にSMA50を上抜け（転換サイン）
+      - close_gt_sma: 50
+      # RSI回復中（売られすぎから脱出）
+      - rsi_between: [40, 65]
+      # 52週高値から20%以上の下落（十分な調整がある）
+      - decline_from_52w_high_ge: 0.20
+      # 直近5日のモメンタムがプラス（底打ち確認）
+      - recent_5d_return_gt: 0.0
+    notes: "長期下落トレンドからの底打ち転換を狙う（SMA50上抜け＋RSI回復）"
+
 # ---------------------------------------------------------------------------
 # ローソク足パターン定義
 # ---------------------------------------------------------------------------
@@ -163,6 +178,7 @@ scoring:
     C_breakout: 25
     D_reversal: 10
     E_can_slim: 35
+    F_turnaround: 22
 
   # 補正（強さ係数） = base × Π(multiplier)
   multipliers:
@@ -198,6 +214,7 @@ scoring:
     C_breakout: [turnover_rank, atr_percent, volume_ratio]
     D_reversal: [turnover_rank, atr_percent]
     E_can_slim: [turnover_rank, atr_percent, volume_ratio]
+    F_turnaround: [turnover_rank, atr_percent, volume_ratio]
 
   # ETF用オーバーライド
   instrument_overrides:

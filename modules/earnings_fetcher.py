@@ -1,5 +1,6 @@
 """決算発表予定日をJPX公式Excelから取得・キャッシュするモジュール"""
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,6 +15,30 @@ from config.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+_JPX_INDEX_URL = "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/index.html"
+_JPX_BASE_URL = "https://www.jpx.co.jp"
+
+
+def _discover_jpx_urls() -> list[str]:
+    """JPXページをクロールして現在有効な kessan*.xlsx のURLを返す。
+    取得失敗時は空リストを返す（呼び出し元で EARNINGS_XLSX_URLS にフォールバック）。
+    """
+    try:
+        resp = requests.get(_JPX_INDEX_URL, timeout=15)
+        resp.raise_for_status()
+        hrefs = re.findall(r'href="([^"]*kessan[^"]*\.xlsx)"', resp.text)
+        urls = []
+        for h in hrefs:
+            url = h if h.startswith("http") else _JPX_BASE_URL + h
+            if url not in urls:
+                urls.append(url)
+        if urls:
+            logger.info(f"JPX URL自動検出: {urls}")
+        return urls
+    except Exception as e:
+        logger.warning(f"JPX URL自動検出失敗: {e}")
+        return []
 
 
 def _download_xlsx(url: str, dest: Path) -> bool:
@@ -119,8 +144,14 @@ def fetch_earnings_data(force: bool = False) -> pd.DataFrame:
             logger.info("決算日キャッシュは有効期間内。スキップ")
             return pd.read_csv(EARNINGS_COMBINED_CSV, dtype={"code": str})
 
+    # 動的URL検出を優先し、失敗時は設定値にフォールバック
+    urls = _discover_jpx_urls()
+    if not urls:
+        logger.warning("JPX URL自動検出できず。設定ファイルのURLを使用します")
+        urls = EARNINGS_XLSX_URLS
+
     all_dfs = []
-    for i, url in enumerate(EARNINGS_XLSX_URLS):
+    for i, url in enumerate(urls):
         dest = EARNINGS_CACHE_DIR / f"earnings_{i+1}.xlsx"
         if _download_xlsx(url, dest):
             df = _parse_earnings_xlsx(dest)

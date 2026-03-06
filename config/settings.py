@@ -13,9 +13,8 @@ DAILY_PICKS_CSV = DATA_DIR / "daily_picks.csv"
 EARNINGS_CACHE_DIR = DATA_DIR / "earnings"
 EARNINGS_COMBINED_CSV = DATA_DIR / "earnings" / "earnings_dates.csv"
 EARNINGS_XLSX_URLS = [
-    "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/tvdivq0000001ofb-att/kessan.xlsx",
     "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/tvdivq0000001ofb-att/kessan12_0206.xlsx",
-    "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/tvdivq0000001ofb-att/kessan01_0206.xlsx",
+    "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/tvdivq0000001ofb-att/kessan01_0220.xlsx",
 ]
 EARNINGS_CACHE_MAX_AGE_HOURS = 24
 
