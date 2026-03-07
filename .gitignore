@@ -205,3 +205,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ------------------------------------------------------------------
+# JPX500 Wave Analysis (generated artifacts)
+# ------------------------------------------------------------------
+data/cache/
+data/earnings/*.xlsx
+data/plots/
+data/scenarios/
+data/pattern_sets/
+
+# Generated outputs (keep the tracked seed CSVs separately)
+data/*_trades*.csv
+data/backtest_*.csv
+data/style_optimization*.csv
+
+# Local scratch / e2e artifacts
+test_screenshots/
+test_debug.py
+test_playwright.py
+nul
