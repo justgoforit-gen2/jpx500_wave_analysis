@@ -1,4 +1,5 @@
 """Yahoo Finance からOHLCVを取得し、parquetキャッシュに保存する"""
+
 import logging
 import time
 from datetime import datetime, timedelta
@@ -73,7 +74,9 @@ def get_fx_to_jpy_daily(currency: str) -> pd.Series | None:
 
     ccyusd = _fetch_fx_pair(f"{ccy}USD=X")
     if ccyusd is not None and not ccyusd.empty:
-        joined = pd.concat([ccyusd.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1).dropna()
+        joined = pd.concat(
+            [ccyusd.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1
+        ).dropna()
         if joined.empty:
             return None
         return (joined["ccyusd"] * joined["usdjpy"]).rename(f"{ccy}JPY")
@@ -82,7 +85,9 @@ def get_fx_to_jpy_daily(currency: str) -> pd.Series | None:
     usdccy = _fetch_fx_pair(f"USD{ccy}=X")
     if usdccy is not None and not usdccy.empty:
         inv = (1.0 / usdccy.replace(0, pd.NA)).dropna()
-        joined = pd.concat([inv.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1).dropna()
+        joined = pd.concat(
+            [inv.rename("ccyusd"), usdjpy.rename("usdjpy")], axis=1
+        ).dropna()
         if joined.empty:
             return None
         return (joined["ccyusd"] * joined["usdjpy"]).rename(f"{ccy}JPY")
@@ -100,7 +105,9 @@ def get_fx_to_jpy_monthly_avg(currency: str) -> pd.Series | None:
     return monthly
 
 
-def convert_ohlcv_close_to_jpy_by_month_avg(df: pd.DataFrame, currency: str) -> pd.DataFrame:
+def convert_ohlcv_close_to_jpy_by_month_avg(
+    df: pd.DataFrame, currency: str
+) -> pd.DataFrame:
     """OHLCVのCloseを、月平均為替でJPY換算して返す（元のdfは変更しない）"""
     ccy = (currency or "").upper()
     if df is None or df.empty or ccy in ("JPY", ""):
@@ -125,9 +132,13 @@ def convert_ohlcv_close_to_jpy_by_month_avg(df: pd.DataFrame, currency: str) -> 
     fx_for_days = fx_m2.reindex(month_key).ffill().bfill().to_numpy()
 
     if "Close" in out.columns:
-        out["Close"] = pd.to_numeric(out["Close"], errors="coerce").to_numpy() * fx_for_days
+        out["Close"] = (
+            pd.to_numeric(out["Close"], errors="coerce").to_numpy() * fx_for_days
+        )
     elif "close" in out.columns:
-        out["close"] = pd.to_numeric(out["close"], errors="coerce").to_numpy() * fx_for_days
+        out["close"] = (
+            pd.to_numeric(out["close"], errors="coerce").to_numpy() * fx_for_days
+        )
     else:
         # Close列が無い場合は作成（チャート用途）
         out["Close"] = close.to_numpy() * fx_for_days
@@ -181,14 +192,18 @@ def fetch_and_cache(ticker: str, full_refresh: bool = False) -> pd.DataFrame | N
     now = datetime.now()
     end_day = (now + timedelta(days=1)).date()
     end_date = end_day.strftime("%Y-%m-%d")
-    start_date = (now - timedelta(days=DATA_PERIOD_YEARS * 365 + 30)).strftime("%Y-%m-%d")
+    start_date = (now - timedelta(days=DATA_PERIOD_YEARS * 365 + 30)).strftime(
+        "%Y-%m-%d"
+    )
 
     existing = None
     if cache.exists() and not full_refresh:
         existing = pd.read_parquet(cache)
         existing.index = pd.to_datetime(existing.index)
         last_ts = existing.index.max()
-        last_day = last_ts.date() if hasattr(last_ts, "date") else pd.Timestamp(last_ts).date()
+        last_day = (
+            last_ts.date() if hasattr(last_ts, "date") else pd.Timestamp(last_ts).date()
+        )
         # 差分取得: 最終日の翌日から
         diff_start_day = last_day + timedelta(days=1)
         diff_start = diff_start_day.strftime("%Y-%m-%d")
@@ -274,16 +289,16 @@ def get_nikkei225() -> pd.DataFrame | None:
 
 # 海外主要指数マスタ: {ticker: 表示名}
 GLOBAL_INDICES: dict[str, str] = {
-    "^DJI":      "ダウ平均",
-    "^GSPC":     "S&P500",
-    "^GDAXI":    "DAX",
+    "^DJI": "ダウ平均",
+    "^GSPC": "S&P500",
+    "^GDAXI": "DAX",
     "^STOXX50E": "Euro Stoxx50",
-    "^KS11":     "KOSPI",
-    "^NDX":      "Nasdaq100",
-    "^HSI":      "ハンセン指数",
+    "^KS11": "KOSPI",
+    "^NDX": "Nasdaq100",
+    "^HSI": "ハンセン指数",
     "000300.SS": "CSI300",
-    "^NSEI":     "Nifty50",
-    "^AXJO":     "ASX200",
+    "^NSEI": "Nifty50",
+    "^AXJO": "ASX200",
 }
 
 
@@ -333,12 +348,14 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
             period_label = f"{dt.year}年{dt.month}月期"
             op_margin = (op_income / revenue * 100) if op_income is not None else None
 
-            rows.append({
-                "period": period_label,
-                "revenue": round(revenue / 1e8, 1),  # 億円
-                "op_margin": round(op_margin, 2) if op_margin is not None else None,
-                "is_forecast": False,
-            })
+            rows.append(
+                {
+                    "period": period_label,
+                    "revenue": round(revenue / 1e8, 1),  # 億円
+                    "op_margin": round(op_margin, 2) if op_margin is not None else None,
+                    "is_forecast": False,
+                }
+            )
 
         # 予測データの取得を試みる
         try:
@@ -350,21 +367,29 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
                     avg_rev = rev_est.loc[idx_label, "avg"]
                     if pd.notna(avg_rev) and avg_rev > 0:
                         avg_earn = None
-                        if earn_est is not None and not earn_est.empty and "avg" in earn_est.columns:
+                        if (
+                            earn_est is not None
+                            and not earn_est.empty
+                            and "avg" in earn_est.columns
+                        ):
                             if idx_label in earn_est.index:
                                 avg_earn = earn_est.loc[idx_label, "avg"]
 
                         # 予測の営業利益率は概算（earnings≒純利益なので参考値）
                         est_margin = None
                         if avg_earn is not None and pd.notna(avg_earn) and avg_rev > 0:
-                            est_margin = round(float(avg_earn) / float(avg_rev) * 100, 2)
+                            est_margin = round(
+                                float(avg_earn) / float(avg_rev) * 100, 2
+                            )
 
-                        rows.append({
-                            "period": f"{idx_label}(予)",
-                            "revenue": round(float(avg_rev) / 1e8, 1),
-                            "op_margin": est_margin,
-                            "is_forecast": True,
-                        })
+                        rows.append(
+                            {
+                                "period": f"{idx_label}(予)",
+                                "revenue": round(float(avg_rev) / 1e8, 1),
+                                "op_margin": est_margin,
+                                "is_forecast": True,
+                            }
+                        )
         except Exception:
             pass  # 予測データが取得できなくても実績のみで続行
 
@@ -394,21 +419,35 @@ def compute_sector_stats(results_df: pd.DataFrame) -> pd.DataFrame:
     for sector, group in results_df.groupby("sector_33"):
         if pd.isna(sector) or sector == "":
             continue
-        per_vals = group["per"].dropna() if "per" in group.columns else pd.Series(dtype=float)
-        pbr_vals = group["pbr"].dropna() if "pbr" in group.columns else pd.Series(dtype=float)
+        per_vals = (
+            group["per"].dropna() if "per" in group.columns else pd.Series(dtype=float)
+        )
+        pbr_vals = (
+            group["pbr"].dropna() if "pbr" in group.columns else pd.Series(dtype=float)
+        )
 
         row = {
             "sector_33": sector,
             "count": len(group),
-            "per_median": round(float(per_vals.median()), 2) if len(per_vals) > 0 else None,
-            "pbr_median": round(float(pbr_vals.median()), 2) if len(pbr_vals) > 0 else None,
+            "per_median": round(float(per_vals.median()), 2)
+            if len(per_vals) > 0
+            else None,
+            "pbr_median": round(float(pbr_vals.median()), 2)
+            if len(pbr_vals) > 0
+            else None,
         }
 
         if has_market_cap:
             mc_vals = group["market_cap"].dropna()
-            row["market_cap_total"] = round(float(mc_vals.sum()) / 1e8, 0) if len(mc_vals) > 0 else None
+            row["market_cap_total"] = (
+                round(float(mc_vals.sum()) / 1e8, 0) if len(mc_vals) > 0 else None
+            )
             row["market_cap_count"] = int(len(mc_vals))
-            row["market_cap_coverage_pct"] = round(float(len(mc_vals)) / float(len(group)) * 100, 1) if len(group) > 0 else None
+            row["market_cap_coverage_pct"] = (
+                round(float(len(mc_vals)) / float(len(group)) * 100, 1)
+                if len(group) > 0
+                else None
+            )
         else:
             row["market_cap_total"] = None
             row["market_cap_count"] = None
@@ -419,7 +458,9 @@ def compute_sector_stats(results_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("sector_33").reset_index(drop=True)
 
 
-def compute_sector_index(sector_33: str, results_df: pd.DataFrame) -> pd.DataFrame | None:
+def compute_sector_index(
+    sector_33: str, results_df: pd.DataFrame
+) -> pd.DataFrame | None:
     """33業種の加重平均指数を算出する（base=100）
 
     market_cap列がある場合は時価総額加重、ない場合は等加重で算出する。

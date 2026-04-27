@@ -79,7 +79,7 @@ def _compute_cup_handle_signal(
 
         found = False
         for h_len in range(handle_len_min, handle_len_max + 1):
-            hs = t - h_len          # ハンドル開始（inclusive）
+            hs = t - h_len  # ハンドル開始（inclusive）
             if hs < cup_len_min:
                 break
             handle = c[hs:t]
@@ -126,7 +126,9 @@ def _compute_cup_handle_signal(
     return pd.Series(out, index=close.index)
 
 
-def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str, pd.Series]:
+def compute_signals(
+    features: dict[str, pd.Series], strategy: dict
+) -> dict[str, pd.Series]:
     patterns_cfg = get_patterns(strategy)
     signals: dict[str, pd.Series] = {}
 
@@ -145,7 +147,11 @@ def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str,
     sma50 = features.get("sma_50")
     sma200 = features.get("sma_200")
     if sma50 is not None and sma200 is not None:
-        a = (close > sma200) & (sma50 > sma200) & ((sma50 - sma50.shift(lookback_a)) > 0)
+        a = (
+            (close > sma200)
+            & (sma50 > sma200)
+            & ((sma50 - sma50.shift(lookback_a)) > 0)
+        )
         signals["A_trend"] = a.fillna(False)
 
     # --- B_pullback ---
@@ -194,9 +200,15 @@ def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str,
     volume_ratio = features.get("volume_ratio")
     atr_pct = features.get("atr_pct")
     if volume_ratio is not None and atr_pct is not None:
-        past_high = high.shift(1).rolling(window=breakout_n, min_periods=breakout_n).max()
+        past_high = (
+            high.shift(1).rolling(window=breakout_n, min_periods=breakout_n).max()
+        )
         pct_rank = _rolling_atr_pct_rank_le(atr_pct, rank_window)
-        c = (high > past_high) & (volume_ratio > vr_threshold) & (pct_rank <= rank_threshold)
+        c = (
+            (high > past_high)
+            & (volume_ratio > vr_threshold)
+            & (pct_rank <= rank_threshold)
+        )
         signals["C_breakout"] = c.fillna(False)
 
     # --- D_reversal ---
@@ -214,29 +226,39 @@ def compute_signals(features: dict[str, pd.Series], strategy: dict) -> dict[str,
     if sma200_d is not None:
         drop_pct = (close - close.shift(n)) / close.shift(n)
         body = (close - open_).abs()
-        day_range = (high - low)
-        lower_shadow = np.minimum(open_.to_numpy(dtype=float, copy=False), close.to_numpy(dtype=float, copy=False)) - low.to_numpy(
-            dtype=float, copy=False
-        )
+        day_range = high - low
+        lower_shadow = np.minimum(
+            open_.to_numpy(dtype=float, copy=False),
+            close.to_numpy(dtype=float, copy=False),
+        ) - low.to_numpy(dtype=float, copy=False)
 
         # hammer rules
-        ratio = float(strategy.get("candle_patterns", {})
-                      .get("bullish_reversal_candle", {})
-                      .get("rules", {})
-                      .get("lower_shadow_min_body_ratio", 1.5))
-        max_body_ratio = float(strategy.get("candle_patterns", {})
-                               .get("bullish_reversal_candle", {})
-                               .get("rules", {})
-                               .get("body_max_range_ratio", 0.40))
+        ratio = float(
+            strategy.get("candle_patterns", {})
+            .get("bullish_reversal_candle", {})
+            .get("rules", {})
+            .get("lower_shadow_min_body_ratio", 1.5)
+        )
+        max_body_ratio = float(
+            strategy.get("candle_patterns", {})
+            .get("bullish_reversal_candle", {})
+            .get("rules", {})
+            .get("body_max_range_ratio", 0.40)
+        )
 
         body_np = body.to_numpy(dtype=float, copy=False)
         range_np = day_range.to_numpy(dtype=float, copy=False)
 
         cond_range = range_np > 0
-        cond_lower = np.where(body_np > 0, lower_shadow >= body_np * ratio, lower_shadow > 0)
+        cond_lower = np.where(
+            body_np > 0, lower_shadow >= body_np * ratio, lower_shadow > 0
+        )
         cond_body = body_np <= range_np * max_body_ratio
         cond_close = close >= open_
-        hammer = pd.Series(cond_range & cond_lower & cond_body, index=close.index) & cond_close
+        hammer = (
+            pd.Series(cond_range & cond_lower & cond_body, index=close.index)
+            & cond_close
+        )
 
         d = (
             (close > sma200_d)
@@ -322,7 +344,11 @@ def score_at_date(
         if mult_type == "piecewise":
             m = float(_calc_multiplier_piecewise(value, mult_cfg.get("points", [])))
         elif mult_type == "linear":
-            m = float(_calc_multiplier_linear(value, mult_cfg.get("params", {}), mult_cfg.get("clip")))
+            m = float(
+                _calc_multiplier_linear(
+                    value, mult_cfg.get("params", {}), mult_cfg.get("clip")
+                )
+            )
         else:
             m = 1.0
         product *= m
@@ -330,7 +356,9 @@ def score_at_date(
     return round(base * product, 2)
 
 
-def _turnover_rank_pct_at_date(contexts: list[TickerContext], dt: pd.Timestamp) -> dict[str, float]:
+def _turnover_rank_pct_at_date(
+    contexts: list[TickerContext], dt: pd.Timestamp
+) -> dict[str, float]:
     vals: dict[str, float] = {}
     for ctx in contexts:
         s = ctx.features.get("turnover")
@@ -393,7 +421,9 @@ def build_contexts(
         # EPS フィルタ: 対象外 ticker の E シグナルを無効化
         if eps_eligible is not None and ticker not in eps_eligible:
             if "E_can_slim" in signals:
-                signals["E_can_slim"] = pd.Series(False, index=signals["E_can_slim"].index)
+                signals["E_can_slim"] = pd.Series(
+                    False, index=signals["E_can_slim"].index
+                )
 
         is_etf = str(row.get("size_category", "")).upper() == "ETF"
         contexts.append(
@@ -418,7 +448,9 @@ def weekly_rebalance_dates(trading_days: pd.DatetimeIndex) -> list[pd.Timestamp]
     return [pd.Timestamp(x) for x in firsts.to_list()]
 
 
-def _next_trading_day(trading_days: pd.DatetimeIndex, dt: pd.Timestamp) -> pd.Timestamp | None:
+def _next_trading_day(
+    trading_days: pd.DatetimeIndex, dt: pd.Timestamp
+) -> pd.Timestamp | None:
     if dt not in trading_days:
         return None
     i = trading_days.get_loc(dt)
@@ -493,24 +525,44 @@ def run_backtest(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Daily exit rules + weekly rebalance entries.
 
-        Exit reasons recorded in trades:
-      - time_exit: holding days reached
-      - trailing_atr: close fell below trailing stop
-      - trend_exit: close < SMA(period)
-      - rebalance_drop: removed from weekly target basket
-            - regime_off: benchmark regime filter turned off
+      Exit reasons recorded in trades:
+    - time_exit: holding days reached
+    - trailing_atr: close fell below trailing stop
+    - trend_exit: close < SMA(period)
+    - rebalance_drop: removed from weekly target basket
+          - regime_off: benchmark regime filter turned off
     """
     exec_cfg = strategy.get("execution", {})
     roundtrip_cost = float(exec_cfg.get("transaction_cost_roundtrip", 0.003))
     cost_side = roundtrip_cost / 2.0
 
     exits_cfg = strategy.get("holding", {}).get("exits", {})
-    use_time_exit = bool(exits_cfg.get("use_time_exit", True)) if use_time_exit_override is None else bool(use_time_exit_override)
+    use_time_exit = (
+        bool(exits_cfg.get("use_time_exit", True))
+        if use_time_exit_override is None
+        else bool(use_time_exit_override)
+    )
     use_trailing = bool(exits_cfg.get("use_trailing_atr", True))
-    trailing_mult_base = float(exits_cfg.get("trailing_atr_mult", 2.0)) if trailing_atr_mult_override is None else float(trailing_atr_mult_override)
-    use_trend_exit = bool(exits_cfg.get("use_trend_exit", True)) if use_trend_exit_override is None else bool(use_trend_exit_override)
-    trend_period = int(exits_cfg.get("trend_exit_rule", {}).get("period", 50)) if trend_exit_period_override is None else int(trend_exit_period_override)
-    time_exit_days = int(time_exit_days_override) if time_exit_days_override is not None else _time_exit_days(strategy)
+    trailing_mult_base = (
+        float(exits_cfg.get("trailing_atr_mult", 2.0))
+        if trailing_atr_mult_override is None
+        else float(trailing_atr_mult_override)
+    )
+    use_trend_exit = (
+        bool(exits_cfg.get("use_trend_exit", True))
+        if use_trend_exit_override is None
+        else bool(use_trend_exit_override)
+    )
+    trend_period = (
+        int(exits_cfg.get("trend_exit_rule", {}).get("period", 50))
+        if trend_exit_period_override is None
+        else int(trend_exit_period_override)
+    )
+    time_exit_days = (
+        int(time_exit_days_override)
+        if time_exit_days_override is not None
+        else _time_exit_days(strategy)
+    )
 
     td = trading_days[(trading_days >= start_date) & (trading_days <= end_date)]
     if len(td) < 60:
@@ -526,7 +578,6 @@ def run_backtest(
 
     ctx_by_ticker = {c.ticker: c for c in contexts}
     pending_exits: dict[str, dict[str, Any]] = {}
-    last_target_set: set[str] = set()
 
     if market_regime is not None:
         try:
@@ -568,7 +619,11 @@ def run_backtest(
             entry_gross = entry_px * shares
             entry_fee = entry_gross * cost_side
             pnl = net - (entry_gross + entry_fee)
-            ret = pnl / (entry_gross + entry_fee) if (entry_gross + entry_fee) > 0 else 0.0
+            ret = (
+                pnl / (entry_gross + entry_fee)
+                if (entry_gross + entry_fee) > 0
+                else 0.0
+            )
 
             trades.append(
                 {
@@ -608,7 +663,9 @@ def run_backtest(
 
             # update trailing state
             pos["days_held"] = int(pos.get("days_held", 0)) + 1
-            pos["highest_close"] = float(max(float(pos.get("highest_close", close)), close))
+            pos["highest_close"] = float(
+                max(float(pos.get("highest_close", close)), close)
+            )
 
             reason = None
             if use_time_exit and pos["days_held"] >= time_exit_days:
@@ -662,7 +719,11 @@ def run_backtest(
                             continue
 
                         rsi_series = ctx.features.get("rsi")
-                        rsi_signal = float(rsi_series.get(signal_dt, np.nan)) if rsi_series is not None else np.nan
+                        rsi_signal = (
+                            float(rsi_series.get(signal_dt, np.nan))
+                            if rsi_series is not None
+                            else np.nan
+                        )
                         if entry_rsi_max is not None and not np.isnan(rsi_signal):
                             if rsi_signal >= float(entry_rsi_max):
                                 continue
@@ -671,7 +732,10 @@ def run_backtest(
                         for pat, sig in ctx.signals.items():
                             try:
                                 if bool(sig.get(signal_dt, False)):
-                                    if allowed_patterns is None or pat in allowed_patterns:
+                                    if (
+                                        allowed_patterns is None
+                                        or pat in allowed_patterns
+                                    ):
                                         matched.append(pat)
                             except Exception:
                                 continue
@@ -707,7 +771,9 @@ def run_backtest(
                                 "ctx": ctx,
                                 "best_pattern": best_pat,
                                 "best_score": float(best_score),
-                                "rsi_signal": None if np.isnan(rsi_signal) else float(rsi_signal),
+                                "rsi_signal": None
+                                if np.isnan(rsi_signal)
+                                else float(rsi_signal),
                             }
                         )
                     candidates.sort(key=lambda x: x["best_score"], reverse=True)
@@ -775,11 +841,15 @@ def run_backtest(
                         continue
                     gross = entry_px * shares
                     fee = gross * cost_side
-                    cash -= (gross + fee)
+                    cash -= gross + fee
 
                     rsi_sig = item.get("rsi_signal")
                     if rsi_sig is not None and trailing_atr_mult_high_rsi is not None:
-                        tmult_used = float(trailing_atr_mult_high_rsi) if float(rsi_sig) >= float(high_rsi_threshold) else float(trailing_mult_base)
+                        tmult_used = (
+                            float(trailing_atr_mult_high_rsi)
+                            if float(rsi_sig) >= float(high_rsi_threshold)
+                            else float(trailing_mult_base)
+                        )
                     else:
                         tmult_used = float(trailing_mult_base)
 
@@ -792,12 +862,12 @@ def run_backtest(
                         "entry_price": entry_px,
                         "shares": shares,
                         "days_held": 0,
-                        "highest_close": float(_get_price(ctx, dt, "close")) if not np.isnan(_get_price(ctx, dt, "close")) else float(entry_px),
+                        "highest_close": float(_get_price(ctx, dt, "close"))
+                        if not np.isnan(_get_price(ctx, dt, "close"))
+                        else float(entry_px),
                         "entry_rsi_signal": rsi_sig,
                         "trailing_mult_used": tmult_used,
                     }
-
-                last_target_set = target_set
 
         # 4) mark daily equity at close
         equity_close = cash
@@ -876,7 +946,9 @@ def run_backtest(
                 "end_date": end_dt.strftime("%Y-%m-%d"),
                 "initial_capital": round(float(initial_capital), 2),
                 "final_equity": round(float(end_eq), 2),
-                "total_return_pct": round((end_eq / start_eq - 1.0) * 100.0, 3) if start_eq > 0 else 0.0,
+                "total_return_pct": round((end_eq / start_eq - 1.0) * 100.0, 3)
+                if start_eq > 0
+                else 0.0,
                 "cagr": round(cagr, 6),
                 "annual_vol": round(ann_vol, 6),
                 "sharpe": round(sharpe, 6),
@@ -884,7 +956,9 @@ def run_backtest(
                 "max_drawdown": round(mdd, 6),
                 "trade_count": trade_count,
                 "win_rate": round(win_rate, 6),
-                "profit_factor": round(profit_factor, 6) if np.isfinite(profit_factor) else profit_factor,
+                "profit_factor": round(profit_factor, 6)
+                if np.isfinite(profit_factor)
+                else profit_factor,
                 "avg_positions": round(float(equity_df["positions"].mean()), 3),
             }
         ]

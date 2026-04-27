@@ -51,7 +51,11 @@ def _compute_regime(bench: pd.DataFrame, regime: str) -> tuple[pd.Series | None,
     if regime == "none":
         return None, False
 
-    close_col = "Close" if "Close" in bench.columns else ("close" if "close" in bench.columns else None)
+    close_col = (
+        "Close"
+        if "Close" in bench.columns
+        else ("close" if "close" in bench.columns else None)
+    )
     if close_col is None:
         raise RuntimeError("Benchmark cache for ^N225 has no Close column")
 
@@ -66,8 +70,12 @@ def _compute_regime(bench: pd.DataFrame, regime: str) -> tuple[pd.Series | None,
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Simulate multiple pattern-set styles (A-only/B-only/C-only etc.)")
-    ap.add_argument("--limit", type=int, default=None, help="Limit tickers for quick run")
+    ap = argparse.ArgumentParser(
+        description="Simulate multiple pattern-set styles (A-only/B-only/C-only etc.)"
+    )
+    ap.add_argument(
+        "--limit", type=int, default=None, help="Limit tickers for quick run"
+    )
     ap.add_argument("--years", type=int, default=None)
     ap.add_argument("--initial", type=float, default=10_000_000.0)
     ap.add_argument("--max-positions", type=int, default=None)
@@ -92,8 +100,16 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     strategy = load_strategy(project_dir / "config" / "strategy.yaml")
-    lookback_years = int(args.years) if args.years is not None else int(strategy.get("evaluation", {}).get("lookback_years", 3))
-    max_positions = int(args.max_positions) if args.max_positions is not None else int(strategy.get("execution", {}).get("max_positions", 20))
+    lookback_years = (
+        int(args.years)
+        if args.years is not None
+        else int(strategy.get("evaluation", {}).get("lookback_years", 3))
+    )
+    max_positions = (
+        int(args.max_positions)
+        if args.max_positions is not None
+        else int(strategy.get("execution", {}).get("max_positions", 20))
+    )
 
     bench = load_cached("^N225")
     if bench is None or len(bench) < 250:
@@ -152,12 +168,22 @@ def main() -> None:
             equity_all.append(equity_df)
 
         summary = pd.concat(summaries, ignore_index=True)
-        trades = pd.concat(trades_all, ignore_index=True) if trades_all else pd.DataFrame()
-        equity = pd.concat(equity_all, ignore_index=True) if equity_all else pd.DataFrame()
+        trades = (
+            pd.concat(trades_all, ignore_index=True) if trades_all else pd.DataFrame()
+        )
+        equity = (
+            pd.concat(equity_all, ignore_index=True) if equity_all else pd.DataFrame()
+        )
 
-        summary.to_csv(out_dir / "backtest_summary.csv", index=False, encoding="utf-8-sig")
-        equity.to_csv(out_dir / "backtest_equity_curve.csv", index=False, encoding="utf-8-sig")
-        trades.to_csv(out_dir / "backtest_trades.csv", index=False, encoding="utf-8-sig")
+        summary.to_csv(
+            out_dir / "backtest_summary.csv", index=False, encoding="utf-8-sig"
+        )
+        equity.to_csv(
+            out_dir / "backtest_equity_curve.csv", index=False, encoding="utf-8-sig"
+        )
+        trades.to_csv(
+            out_dir / "backtest_trades.csv", index=False, encoding="utf-8-sig"
+        )
 
         for _, r in summary.iterrows():
             rows.append(
@@ -192,10 +218,24 @@ def main() -> None:
     try:
         g = grid.copy()
         g["cagr"] = pd.to_numeric(g["cagr"], errors="coerce")
-        best = g[g["policy"] == "fixed_rate"].sort_values("cagr", ascending=False).head(10)
+        best = (
+            g[g["policy"] == "fixed_rate"].sort_values("cagr", ascending=False).head(10)
+        )
         if len(best) > 0:
             print("Top CAGR (fixed_rate):")
-            print(best[["pattern_set", "regime", "max_positions", "cagr", "max_drawdown", "total_return_pct", "trade_count"]].to_string(index=False))
+            print(
+                best[
+                    [
+                        "pattern_set",
+                        "regime",
+                        "max_positions",
+                        "cagr",
+                        "max_drawdown",
+                        "total_return_pct",
+                        "trade_count",
+                    ]
+                ].to_string(index=False)
+            )
     except Exception:
         pass
 

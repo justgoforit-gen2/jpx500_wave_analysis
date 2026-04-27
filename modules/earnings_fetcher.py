@@ -1,4 +1,5 @@
 """決算発表予定日をJPX公式Excelから取得・キャッシュするモジュール"""
+
 import logging
 import re
 from datetime import datetime, timedelta
@@ -16,7 +17,9 @@ from config.settings import (
 
 logger = logging.getLogger(__name__)
 
-_JPX_INDEX_URL = "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/index.html"
+_JPX_INDEX_URL = (
+    "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/index.html"
+)
 _JPX_BASE_URL = "https://www.jpx.co.jp"
 
 
@@ -90,11 +93,15 @@ def _parse_earnings_xlsx(filepath: Path) -> pd.DataFrame:
         col_lower = col.strip()
         if "コード" in col_lower and code_col is None:
             code_col = col
-        if ("発表日" in col_lower or "決算発表" in col_lower or "予定日" in col_lower) and date_col is None:
+        if (
+            "発表日" in col_lower or "決算発表" in col_lower or "予定日" in col_lower
+        ) and date_col is None:
             date_col = col
 
     if code_col is None:
-        logger.warning(f"コード列が見つかりません: {filepath}, columns={list(df.columns)}")
+        logger.warning(
+            f"コード列が見つかりません: {filepath}, columns={list(df.columns)}"
+        )
         return pd.DataFrame(columns=["code", "earnings_date"])
 
     # 日付列が見つからない場合、日付っぽい列を探す
@@ -110,7 +117,9 @@ def _parse_earnings_xlsx(filepath: Path) -> pd.DataFrame:
                     continue
 
     if date_col is None:
-        logger.warning(f"日付列が見つかりません: {filepath}, columns={list(df.columns)}")
+        logger.warning(
+            f"日付列が見つかりません: {filepath}, columns={list(df.columns)}"
+        )
         return pd.DataFrame(columns=["code", "earnings_date"])
 
     result = df[[code_col, date_col]].copy()
@@ -152,7 +161,7 @@ def fetch_earnings_data(force: bool = False) -> pd.DataFrame:
 
     all_dfs = []
     for i, url in enumerate(urls):
-        dest = EARNINGS_CACHE_DIR / f"earnings_{i+1}.xlsx"
+        dest = EARNINGS_CACHE_DIR / f"earnings_{i + 1}.xlsx"
         if _download_xlsx(url, dest):
             df = _parse_earnings_xlsx(dest)
             if len(df) > 0:
@@ -177,7 +186,9 @@ def load_earnings_dates() -> pd.DataFrame | None:
     return None
 
 
-def get_earnings_dates_for_code(code: str, earnings_df: pd.DataFrame | None) -> list[str]:
+def get_earnings_dates_for_code(
+    code: str, earnings_df: pd.DataFrame | None
+) -> list[str]:
     """指定銘柄の決算日リストを返す"""
     if earnings_df is None or len(earnings_df) == 0:
         return []

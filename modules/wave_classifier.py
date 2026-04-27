@@ -1,4 +1,5 @@
 """波形タイプ分類ロジック: 7指標を計算し6タイプを判定する"""
+
 import numpy as np
 import pandas as pd
 
@@ -77,7 +78,11 @@ def compute_indicators(df: pd.DataFrame, window: int = DEFAULT_WINDOW) -> dict |
     tr_high_close = np.abs(full_df["High"].values[1:] - full_df["Close"].values[:-1])
     tr_low_close = np.abs(full_df["Low"].values[1:] - full_df["Close"].values[:-1])
     tr = np.maximum(tr_high_low[1:], np.maximum(tr_high_close, tr_low_close))
-    atr = float(np.nanmean(tr[-ATR_PERIOD:])) if len(tr) >= ATR_PERIOD else float(np.nanmean(tr))
+    atr = (
+        float(np.nanmean(tr[-ATR_PERIOD:]))
+        if len(tr) >= ATR_PERIOD
+        else float(np.nanmean(tr))
+    )
 
     # 6. bandwidth (ボリンジャーバンド幅)
     close_series = pd.Series(close)
@@ -100,7 +105,9 @@ def compute_indicators(df: pd.DataFrame, window: int = DEFAULT_WINDOW) -> dict |
 
     # 7. breakout_days
     recent_close = close[-BREAKOUT_LOOKBACK_DAYS:]
-    breakout_days = int(np.sum((recent_close > range_high) | (recent_close < range_low)))
+    breakout_days = int(
+        np.sum((recent_close > range_high) | (recent_close < range_low))
+    )
 
     # 高値切り上げ / 安値切り下げ判定
     half = len(close) // 2
@@ -177,51 +184,55 @@ def classify_all(window: int = DEFAULT_WINDOW) -> pd.DataFrame:
         valuation = fetch_valuation(ticker)
 
         if indicators is None:
-            results.append({
+            results.append(
+                {
+                    "code": row["code"],
+                    "name": row["name"],
+                    "size_category": row["size_category"],
+                    "sector_33": row.get("sector_33", ""),
+                    "ticker": ticker,
+                    "wave_types": "データ不足",
+                    "range_high": None,
+                    "range_low": None,
+                    "range_pct": None,
+                    "slope": None,
+                    "touch_high": None,
+                    "touch_low": None,
+                    "touch_total": None,
+                    "atr": None,
+                    "bandwidth": None,
+                    "breakout_days": None,
+                    "per": valuation["per"],
+                    "pbr": valuation["pbr"],
+                    "market_cap": valuation["market_cap"],
+                }
+            )
+            continue
+
+        wave_types = classify(indicators)
+        results.append(
+            {
                 "code": row["code"],
                 "name": row["name"],
                 "size_category": row["size_category"],
                 "sector_33": row.get("sector_33", ""),
                 "ticker": ticker,
-                "wave_types": "データ不足",
-                "range_high": None,
-                "range_low": None,
-                "range_pct": None,
-                "slope": None,
-                "touch_high": None,
-                "touch_low": None,
-                "touch_total": None,
-                "atr": None,
-                "bandwidth": None,
-                "breakout_days": None,
+                "wave_types": "|".join(wave_types),
+                "range_high": indicators["range_high"],
+                "range_low": indicators["range_low"],
+                "range_pct": indicators["range_pct"],
+                "slope": indicators["slope"],
+                "touch_high": indicators["touch_high"],
+                "touch_low": indicators["touch_low"],
+                "touch_total": indicators["touch_total"],
+                "atr": indicators["atr"],
+                "bandwidth": indicators["bandwidth"],
+                "breakout_days": indicators["breakout_days"],
                 "per": valuation["per"],
                 "pbr": valuation["pbr"],
                 "market_cap": valuation["market_cap"],
-            })
-            continue
-
-        wave_types = classify(indicators)
-        results.append({
-            "code": row["code"],
-            "name": row["name"],
-            "size_category": row["size_category"],
-            "sector_33": row.get("sector_33", ""),
-            "ticker": ticker,
-            "wave_types": "|".join(wave_types),
-            "range_high": indicators["range_high"],
-            "range_low": indicators["range_low"],
-            "range_pct": indicators["range_pct"],
-            "slope": indicators["slope"],
-            "touch_high": indicators["touch_high"],
-            "touch_low": indicators["touch_low"],
-            "touch_total": indicators["touch_total"],
-            "atr": indicators["atr"],
-            "bandwidth": indicators["bandwidth"],
-            "breakout_days": indicators["breakout_days"],
-            "per": valuation["per"],
-            "pbr": valuation["pbr"],
-            "market_cap": valuation["market_cap"],
-        })
+            }
+        )
 
     result_df = pd.DataFrame(results)
     result_df.to_csv(RESULTS_CSV, index=False, encoding="utf-8-sig")
@@ -236,7 +247,9 @@ def generate_daily_picks(window: int = DEFAULT_WINDOW) -> pd.DataFrame:
     """
     results = pd.read_csv(RESULTS_CSV, encoding="utf-8-sig", dtype={"code": str})
     range_stocks = results[
-        results["wave_types"].apply(lambda x: "レンジ（波型）" in str(x) if pd.notna(x) else False)
+        results["wave_types"].apply(
+            lambda x: "レンジ（波型）" in str(x) if pd.notna(x) else False
+        )
     ]
 
     picks = []
@@ -284,7 +297,11 @@ def generate_daily_picks(window: int = DEFAULT_WINDOW) -> pd.DataFrame:
 
         # レンジ内での位置 (0%=下限, 100%=上限)
         range_width = range_high - range_low
-        position_pct = ((latest_close - range_low) / range_width * 100) if range_width > 0 else 50.0
+        position_pct = (
+            ((latest_close - range_low) / range_width * 100)
+            if range_width > 0
+            else 50.0
+        )
 
         pick_type = []
         if near_low:
@@ -292,28 +309,32 @@ def generate_daily_picks(window: int = DEFAULT_WINDOW) -> pd.DataFrame:
         if near_high:
             pick_type.append("上タッチ（利確/ブレイク監視）")
 
-        picks.append({
-            "date": latest_date,
-            "code": row["code"],
-            "name": row["name"],
-            "size_category": row["size_category"],
-            "ticker": ticker,
-            "pick_type": "|".join(pick_type),
-            "latest_close": round(latest_close, 2),
-            "range_high": range_high,
-            "range_low": range_low,
-            "range_pct": indicators["range_pct"],
-            "position_pct": round(position_pct, 1),
-            "slope": indicators["slope"],
-            "touch_high": indicators["touch_high"],
-            "touch_low": indicators["touch_low"],
-            "atr": indicators["atr"],
-            "rsi": round(rsi_val, 1) if rsi_val is not None else None,
-            "rsi_signal": rsi_signal,
-        })
+        picks.append(
+            {
+                "date": latest_date,
+                "code": row["code"],
+                "name": row["name"],
+                "size_category": row["size_category"],
+                "ticker": ticker,
+                "pick_type": "|".join(pick_type),
+                "latest_close": round(latest_close, 2),
+                "range_high": range_high,
+                "range_low": range_low,
+                "range_pct": indicators["range_pct"],
+                "position_pct": round(position_pct, 1),
+                "slope": indicators["slope"],
+                "touch_high": indicators["touch_high"],
+                "touch_low": indicators["touch_low"],
+                "atr": indicators["atr"],
+                "rsi": round(rsi_val, 1) if rsi_val is not None else None,
+                "rsi_signal": rsi_signal,
+            }
+        )
 
     picks_df = pd.DataFrame(picks)
     if len(picks_df) > 0:
-        picks_df.sort_values(["pick_type", "position_pct"], ascending=[True, True], inplace=True)
+        picks_df.sort_values(
+            ["pick_type", "position_pct"], ascending=[True, True], inplace=True
+        )
     picks_df.to_csv(DAILY_PICKS_CSV, index=False, encoding="utf-8-sig")
     return picks_df

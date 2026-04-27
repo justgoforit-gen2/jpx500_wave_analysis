@@ -35,7 +35,9 @@ def _bin_rsi(v: float | None) -> str | None:
     return None
 
 
-def _prev_trading_day_map(trading_days: pd.DatetimeIndex) -> dict[pd.Timestamp, pd.Timestamp | None]:
+def _prev_trading_day_map(
+    trading_days: pd.DatetimeIndex,
+) -> dict[pd.Timestamp, pd.Timestamp | None]:
     trading_days = pd.DatetimeIndex(pd.to_datetime(trading_days)).sort_values()
     m: dict[pd.Timestamp, pd.Timestamp | None] = {}
     prev: pd.Timestamp | None = None
@@ -88,7 +90,9 @@ def enrich_trades_with_rsi(
     out["entry_date"] = pd.to_datetime(out["entry_date"], errors="coerce")
     out["exit_date"] = pd.to_datetime(out["exit_date"], errors="coerce")
     if "exit_trigger_date" in out.columns:
-        out["exit_trigger_date"] = pd.to_datetime(out["exit_trigger_date"], errors="coerce")
+        out["exit_trigger_date"] = pd.to_datetime(
+            out["exit_trigger_date"], errors="coerce"
+        )
     else:
         out["exit_trigger_date"] = pd.NaT
 
@@ -115,10 +119,26 @@ def enrich_trades_with_rsi(
         if pd.notna(entry_dt):
             signal_dt = prev_map.get(pd.Timestamp(entry_dt), None)
 
-        rsi_signal_list.append(_get_series_value_at(rsi, pd.Timestamp(signal_dt)) if signal_dt is not None else None)
-        rsi_entry_close_list.append(_get_series_value_at(rsi, pd.Timestamp(entry_dt)) if pd.notna(entry_dt) else None)
-        rsi_exit_trigger_list.append(_get_series_value_at(rsi, pd.Timestamp(trigger_dt)) if pd.notna(trigger_dt) else None)
-        rsi_exit_close_list.append(_get_series_value_at(rsi, pd.Timestamp(exit_dt)) if pd.notna(exit_dt) else None)
+        rsi_signal_list.append(
+            _get_series_value_at(rsi, pd.Timestamp(signal_dt))
+            if signal_dt is not None
+            else None
+        )
+        rsi_entry_close_list.append(
+            _get_series_value_at(rsi, pd.Timestamp(entry_dt))
+            if pd.notna(entry_dt)
+            else None
+        )
+        rsi_exit_trigger_list.append(
+            _get_series_value_at(rsi, pd.Timestamp(trigger_dt))
+            if pd.notna(trigger_dt)
+            else None
+        )
+        rsi_exit_close_list.append(
+            _get_series_value_at(rsi, pd.Timestamp(exit_dt))
+            if pd.notna(exit_dt)
+            else None
+        )
 
     out["rsi_signal"] = rsi_signal_list
     out["rsi_entry_close"] = rsi_entry_close_list
@@ -130,7 +150,9 @@ def enrich_trades_with_rsi(
     return out
 
 
-def summarize_factors(enriched: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def summarize_factors(
+    enriched: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     # Overall by policy
     overall = (
         enriched.groupby(["policy"], dropna=False)
@@ -173,15 +195,32 @@ def summarize_factors(enriched: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             .sort_values(["policy", "exit_reason", "rsi_bin"])
         )
     else:
-        by_exit_rsi = pd.DataFrame(columns=["policy", "exit_reason", "rsi_bin", "trades", "win_rate", "avg_return_pct", "avg_rsi_signal"])
+        by_exit_rsi = pd.DataFrame(
+            columns=[
+                "policy",
+                "exit_reason",
+                "rsi_bin",
+                "trades",
+                "win_rate",
+                "avg_return_pct",
+                "avg_rsi_signal",
+            ]
+        )
 
     return overall, by_rsi, by_exit_rsi
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Analyze win/loss factors incl. RSI")
-    ap.add_argument("--trades", type=str, default=None, help="Path to backtest_trades.csv")
-    ap.add_argument("--outdir", type=str, default=None, help="Output directory (default: jpx500_wave_analysis/data)")
+    ap.add_argument(
+        "--trades", type=str, default=None, help="Path to backtest_trades.csv"
+    )
+    ap.add_argument(
+        "--outdir",
+        type=str,
+        default=None,
+        help="Output directory (default: jpx500_wave_analysis/data)",
+    )
     args = ap.parse_args()
 
     project_dir = Path(__file__).resolve().parents[1]
@@ -189,7 +228,9 @@ def main() -> None:
     outdir = Path(args.outdir) if args.outdir else data_dir
     outdir.mkdir(parents=True, exist_ok=True)
 
-    trades_path = Path(args.trades) if args.trades else (data_dir / "backtest_trades.csv")
+    trades_path = (
+        Path(args.trades) if args.trades else (data_dir / "backtest_trades.csv")
+    )
     if not trades_path.exists():
         raise FileNotFoundError(f"Missing trades CSV: {trades_path}")
 
@@ -203,7 +244,9 @@ def main() -> None:
     trading_days = pd.DatetimeIndex(bench.index)
 
     trades_df = pd.read_csv(trades_path, encoding="utf-8-sig")
-    enriched = enrich_trades_with_rsi(trades_df, strategy=strategy, trading_days=trading_days)
+    enriched = enrich_trades_with_rsi(
+        trades_df, strategy=strategy, trading_days=trading_days
+    )
     overall, by_rsi, by_exit_rsi = summarize_factors(enriched)
 
     enriched_path = outdir / "backtest_trades_enriched.csv"

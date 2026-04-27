@@ -1,4 +1,5 @@
 """分類のみ再実行（データ取得スキップ）: market_capを含むresults.csvを再生成"""
+
 import sys
 from pathlib import Path
 

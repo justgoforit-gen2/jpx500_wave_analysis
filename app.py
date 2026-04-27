@@ -1,4 +1,5 @@
 """JPX500 波形タイプ分類アプリ - Streamlit MVP"""
+
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,6 @@ import plotly.express as px
 from config.settings import (
     CACHE_DIR,
     DAILY_PICKS_CSV,
-    DEFAULT_WINDOW,
     STOCK_LIST_CSV,
     RANGE_PCT_LARGE,
     RANGE_PCT_SMALL,
@@ -33,7 +33,12 @@ from config.settings import (
     SQUEEZE_BANDWIDTH_SHRINK,
     DAILY_PICK_LOOKBACK,
 )
-from modules.chart_builder import build_chart, build_comparison_chart, build_financials_chart, build_index_chart
+from modules.chart_builder import (
+    build_chart,
+    build_comparison_chart,
+    build_financials_chart,
+    build_index_chart,
+)
 from modules.data_fetcher import (
     load_cached,
     load_stock_list,
@@ -43,7 +48,6 @@ from modules.data_fetcher import (
     compute_sector_stats,
     fetch_and_cache,
     GLOBAL_INDICES,
-    get_global_index,
     convert_ohlcv_close_to_jpy_by_month_avg,
 )
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
@@ -61,6 +65,7 @@ def _get_price_data_cached(ticker: str) -> pd.DataFrame | None:
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def _get_financials_cached(ticker: str) -> pd.DataFrame | None:
     return fetch_financials(ticker)
+
 
 st.set_page_config(
     page_title="JPX500 波形分類",
@@ -80,9 +85,9 @@ HELP_TEXT = f"""
 | **レンジ（波型）** | 傾き(slope)の絶対値 < {SLOPE_THRESHOLD} かつ タッチ合計 ≥ {RANGE_MIN_TOUCHES}回 | トレンドが弱く、一定の価格帯で上下を反復している状態 |
 | **上昇トレンド** | 傾き > {SLOPE_THRESHOLD} かつ 高値が切り上がっている | 中長期的に価格が右肩上がり |
 | **下降トレンド** | 傾き < -{SLOPE_THRESHOLD} かつ 安値が切り下がっている | 中長期的に価格が右肩下がり |
-| **収束（スクイーズ）** | ボリンジャーバンド幅が後半で前半の{int(SQUEEZE_BANDWIDTH_SHRINK*100)}%以下に縮小 | ボラティリティが低下し、次の大きな動きの前兆となりうる状態 |
+| **収束（スクイーズ）** | ボリンジャーバンド幅が後半で前半の{int(SQUEEZE_BANDWIDTH_SHRINK * 100)}%以下に縮小 | ボラティリティが低下し、次の大きな動きの前兆となりうる状態 |
 | **ブレイク気味** | 直近{BREAKOUT_LOOKBACK_DAYS}日中{BREAKOUT_MIN_DAYS}日以上がレンジ外 | レンジの上限/下限を明確に超えた状態（終値基準） |
-| **高ボラ（荒い）** | ATR ÷ 平均価格 > {HIGH_VOLATILITY_THRESHOLD*100:.0f}% | 価格変動が大きく、安定した反復が弱い |
+| **高ボラ（荒い）** | ATR ÷ 平均価格 > {HIGH_VOLATILITY_THRESHOLD * 100:.0f}% | 価格変動が大きく、安定した反復が弱い |
 
 ### 指標の定義
 
@@ -146,7 +151,9 @@ def get_data_dates() -> dict[str, str]:
     # daily_picks.csv の date 列はバッチが生成するため、Cloudでも追随しやすい
     if DAILY_PICKS_CSV.exists():
         try:
-            picks = pd.read_csv(DAILY_PICKS_CSV, encoding="utf-8-sig", dtype={"code": str})
+            picks = pd.read_csv(
+                DAILY_PICKS_CSV, encoding="utf-8-sig", dtype={"code": str}
+            )
             if "date" in picks.columns and len(picks) > 0:
                 d = pd.to_datetime(picks["date"], errors="coerce").max()
                 if pd.notna(d):
@@ -210,9 +217,7 @@ def is_recommended(row: pd.Series) -> bool:
     has_breakout = "ブレイク気味" in types
 
     return (
-        "レンジ（波型）" in types
-        and slope >= 0
-        and (touch_high >= 3 or has_breakout)
+        "レンジ（波型）" in types and slope >= 0 and (touch_high >= 3 or has_breakout)
     )
 
 
@@ -271,7 +276,11 @@ def show_list_view():
 
     # 33業種区分
     st.sidebar.subheader("33業種区分")
-    all_sectors = sorted(results["sector_33"].dropna().unique().tolist()) if "sector_33" in results.columns else []
+    all_sectors = (
+        sorted(results["sector_33"].dropna().unique().tolist())
+        if "sector_33" in results.columns
+        else []
+    )
     selected_sectors = st.sidebar.multiselect(
         "33業種を選択",
         options=all_sectors,
@@ -336,14 +345,18 @@ def show_list_view():
     st.markdown("### サマリー")
     cols = st.columns(len(WAVE_TYPES))
     for i, wt in enumerate(WAVE_TYPES):
-        count = results["wave_types"].apply(
-            lambda x, _wt=wt: _wt in str(x) if pd.notna(x) else False
-        ).sum()
+        count = (
+            results["wave_types"]
+            .apply(lambda x, _wt=wt: _wt in str(x) if pd.notna(x) else False)
+            .sum()
+        )
         cols[i].metric(wt, f"{count}銘柄")
 
     # 推奨銘柄数
     rec_count = results.apply(is_recommended, axis=1).sum()
-    st.info(f"レンジ→上昇転換候補: **{rec_count}銘柄** （サイドバーの「推奨銘柄」で絞り込み可能）")
+    st.info(
+        f"レンジ→上昇転換候補: **{rec_count}銘柄** （サイドバーの「推奨銘柄」で絞り込み可能）"
+    )
 
     # --- マーケット概況 ---
     st.markdown("---")
@@ -355,7 +368,11 @@ def show_list_view():
         show_nikkei225 = st.checkbox("日経225", value=True, key="mkt_nikkei")
     with mkt_col2:
         st.markdown("**33業種指数（複数可）**")
-        sector_list = sorted(results["sector_33"].dropna().unique().tolist()) if "sector_33" in results.columns else []
+        sector_list = (
+            sorted(results["sector_33"].dropna().unique().tolist())
+            if "sector_33" in results.columns
+            else []
+        )
         selected_mkt_sectors = st.multiselect(
             "33業種を選択",
             options=sector_list,
@@ -373,7 +390,14 @@ def show_list_view():
             label_visibility="collapsed",
         )
 
-    mkt_period_labels = {60: "60日", 120: "120日", 180: "180日", 260: "1年", 520: "2年", 0: "全期間"}
+    mkt_period_labels = {
+        60: "60日",
+        120: "120日",
+        180: "180日",
+        260: "1年",
+        520: "2年",
+        0: "全期間",
+    }
     mkt_period_sel = st.radio(
         "表示期間",
         list(mkt_period_labels.keys()),
@@ -389,19 +413,29 @@ def show_list_view():
         key="mkt_fx_jpy_mode",
     )
 
-    _SECTOR_COLORS = ["#E91E63", "#00BCD4", "#FF9800", "#8BC34A", "#9C27B0",
-                      "#795548", "#FF5722", "#03A9F4", "#607D8B", "#CDDC39"]
+    _SECTOR_COLORS = [
+        "#E91E63",
+        "#00BCD4",
+        "#FF9800",
+        "#8BC34A",
+        "#9C27B0",
+        "#795548",
+        "#FF5722",
+        "#03A9F4",
+        "#607D8B",
+        "#CDDC39",
+    ]
     _GLOBAL_COLORS = {
-        "^DJI":      "#FF5722",
-        "^GSPC":     "#FF9800",
-        "^GDAXI":    "#4CAF50",
+        "^DJI": "#FF5722",
+        "^GSPC": "#FF9800",
+        "^GDAXI": "#4CAF50",
         "^STOXX50E": "#009688",
-        "^KS11":     "#F48FB1",
-        "^NDX":      "#3F51B5",
-        "^HSI":      "#F44336",
+        "^KS11": "#F48FB1",
+        "^NDX": "#3F51B5",
+        "^HSI": "#F44336",
         "000300.SS": "#C2185B",
-        "^NSEI":     "#9C27B0",
-        "^AXJO":     "#795548",
+        "^NSEI": "#9C27B0",
+        "^AXJO": "#795548",
     }
     _GLOBAL_TICKER_TO_CCY = {
         "^DJI": "USD",
@@ -427,7 +461,9 @@ def show_list_view():
         sec_data = compute_sector_index(sector, results)
         if sec_data is not None:
             color = _SECTOR_COLORS[i % len(_SECTOR_COLORS)]
-            mkt_indices.append({"name": f"33業種: {sector}", "data": sec_data, "color": color})
+            mkt_indices.append(
+                {"name": f"33業種: {sector}", "data": sec_data, "color": color}
+            )
 
     for gname in selected_global_names:
         gticker = _GLOBAL_NAME_TO_TICKER.get(gname)
@@ -453,15 +489,17 @@ def show_list_view():
     st.caption("行をクリックすると銘柄一覧をその業種で絞り込みます")
     sector_stats = compute_sector_stats(results)
     if len(sector_stats) > 0:
-        sector_display = sector_stats.rename(columns={
-            "sector_33": "33業種",
-            "count": "銘柄数",
-            "per_median": "PER（中央値）",
-            "pbr_median": "PBR（中央値）",
-            "market_cap_total": "時価総額合計（億円）",
-            "market_cap_count": "時価総額取得数",
-            "market_cap_coverage_pct": "時価総額取得率（%）",
-        })
+        sector_display = sector_stats.rename(
+            columns={
+                "sector_33": "33業種",
+                "count": "銘柄数",
+                "per_median": "PER（中央値）",
+                "pbr_median": "PBR（中央値）",
+                "market_cap_total": "時価総額合計（億円）",
+                "market_cap_count": "時価総額取得数",
+                "market_cap_coverage_pct": "時価総額取得率（%）",
+            }
+        )
         # 時価総額がすべてNoneの場合は列を非表示
         display_cols_sector = [
             "33業種",
@@ -472,17 +510,28 @@ def show_list_view():
             "時価総額取得数",
             "時価総額取得率（%）",
         ]
-        if "時価総額合計（億円）" in sector_display.columns and sector_display["時価総額合計（億円）"].isna().all():
-            for col in ["時価総額合計（億円）", "時価総額取得数", "時価総額取得率（%）"]:
+        if (
+            "時価総額合計（億円）" in sector_display.columns
+            and sector_display["時価総額合計（億円）"].isna().all()
+        ):
+            for col in [
+                "時価総額合計（億円）",
+                "時価総額取得数",
+                "時価総額取得率（%）",
+            ]:
                 if col in display_cols_sector:
                     display_cols_sector.remove(col)
         # 解除ボタンが押された直後はテーブル選択をリセット
         _sector_table_key = "sector_table"
         if st.session_state.get("_clear_sector_flag"):
-            _sector_table_key = f"sector_table_{st.session_state.get('_sector_table_ver', 0)}"
+            _sector_table_key = (
+                f"sector_table_{st.session_state.get('_sector_table_ver', 0)}"
+            )
 
         sector_event = st.dataframe(
-            sector_display[[c for c in display_cols_sector if c in sector_display.columns]],
+            sector_display[
+                [c for c in display_cols_sector if c in sector_display.columns]
+            ],
             use_container_width=True,
             hide_index=True,
             height=400,
@@ -496,7 +545,9 @@ def show_list_view():
             st.session_state["_clear_sector_flag"] = False
             st.session_state["quick_sector_filter"] = None
         elif sector_event and sector_event.selection and sector_event.selection.rows:
-            selected_sector_names = [sector_stats.iloc[i]["sector_33"] for i in sector_event.selection.rows]
+            selected_sector_names = [
+                sector_stats.iloc[i]["sector_33"] for i in sector_event.selection.rows
+            ]
             st.session_state["quick_sector_filter"] = selected_sector_names
         elif "quick_sector_filter" not in st.session_state:
             st.session_state["quick_sector_filter"] = None
@@ -508,12 +559,18 @@ def show_list_view():
     if quick_sectors:
         if "sector_33" in filtered.columns:
             filtered = filtered[filtered["sector_33"].isin(quick_sectors)]
-        label = "、".join(quick_sectors) if len(quick_sectors) <= 3 else f"{quick_sectors[0]} 他{len(quick_sectors)-1}業種"
+        label = (
+            "、".join(quick_sectors)
+            if len(quick_sectors) <= 3
+            else f"{quick_sectors[0]} 他{len(quick_sectors) - 1}業種"
+        )
         if st.button(f"業種絞り込み解除（現在: {label}）", key="btn_clear_sector"):
             st.session_state["quick_sector_filter"] = None
             # テーブルキーを変えて選択状態をリセット
             st.session_state["_clear_sector_flag"] = True
-            st.session_state["_sector_table_ver"] = st.session_state.get("_sector_table_ver", 0) + 1
+            st.session_state["_sector_table_ver"] = (
+                st.session_state.get("_sector_table_ver", 0) + 1
+            )
             st.rerun()
 
     # --- PER×PBR 散布図 ---
@@ -527,7 +584,12 @@ def show_list_view():
         key="perpbr_scope",
     )
     base_df = filtered if perpbr_scope == "絞り込み後" else results
-    if base_df is not None and len(base_df) > 0 and ("per" in base_df.columns) and ("pbr" in base_df.columns):
+    if (
+        base_df is not None
+        and len(base_df) > 0
+        and ("per" in base_df.columns)
+        and ("pbr" in base_df.columns)
+    ):
         scatter_df = base_df.copy()
         scatter_df["per"] = pd.to_numeric(scatter_df["per"], errors="coerce")
         scatter_df["pbr"] = pd.to_numeric(scatter_df["pbr"], errors="coerce")
@@ -546,7 +608,9 @@ def show_list_view():
                 hover_name="name" if "name" in scatter_df.columns else None,
                 hover_data={
                     "code": True if "code" in scatter_df.columns else False,
-                    "size_category": True if "size_category" in scatter_df.columns else False,
+                    "size_category": True
+                    if "size_category" in scatter_df.columns
+                    else False,
                     "wave_types": True if "wave_types" in scatter_df.columns else False,
                     "per": ":.2f",
                     "pbr": ":.2f",
@@ -568,7 +632,9 @@ def show_list_view():
     if picks is not None and len(picks) > 0:
         st.markdown("---")
         st.markdown("### 本日の推奨銘柄（レンジ銘柄の直近タッチ）")
-        st.caption(f"直近{DAILY_PICK_LOOKBACK}営業日以内にレンジ上限/下限付近にタッチした銘柄")
+        st.caption(
+            f"直近{DAILY_PICK_LOOKBACK}営業日以内にレンジ上限/下限付近にタッチした銘柄"
+        )
 
         low_picks = picks[picks["pick_type"].str.contains("下タッチ", na=False)]
         high_picks = picks[picks["pick_type"].str.contains("上タッチ", na=False)]
@@ -579,15 +645,39 @@ def show_list_view():
             st.markdown(f"#### 下タッチ - 買い候補 ({len(low_picks)}銘柄)")
             st.caption("レンジ下限付近まで下落 → 反発を狙える位置")
             if len(low_picks) > 0:
-                pick_display = low_picks[["code", "name", "latest_close", "range_low", "range_high", "range_pct", "position_pct", "slope", "rsi", "rsi_signal"]].rename(columns={
-                    "code": "コード", "name": "銘柄名", "latest_close": "直近終値",
-                    "range_low": "下限", "range_high": "上限",
-                    "range_pct": "レンジ幅%", "position_pct": "位置%", "slope": "傾き",
-                    "rsi": "RSI", "rsi_signal": "RSIシグナル",
-                })
+                pick_display = low_picks[
+                    [
+                        "code",
+                        "name",
+                        "latest_close",
+                        "range_low",
+                        "range_high",
+                        "range_pct",
+                        "position_pct",
+                        "slope",
+                        "rsi",
+                        "rsi_signal",
+                    ]
+                ].rename(
+                    columns={
+                        "code": "コード",
+                        "name": "銘柄名",
+                        "latest_close": "直近終値",
+                        "range_low": "下限",
+                        "range_high": "上限",
+                        "range_pct": "レンジ幅%",
+                        "position_pct": "位置%",
+                        "slope": "傾き",
+                        "rsi": "RSI",
+                        "rsi_signal": "RSIシグナル",
+                    }
+                )
                 event_low = st.dataframe(
-                    pick_display, use_container_width=True, hide_index=True,
-                    on_select="rerun", selection_mode="single-row",
+                    pick_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
                     key="picks_low",
                 )
                 if event_low and event_low.selection and event_low.selection.rows:
@@ -605,15 +695,39 @@ def show_list_view():
             st.markdown(f"#### 上タッチ - 利確/ブレイク監視 ({len(high_picks)}銘柄)")
             st.caption("レンジ上限付近まで上昇 → 利確 or 上抜け監視")
             if len(high_picks) > 0:
-                pick_display = high_picks[["code", "name", "latest_close", "range_low", "range_high", "range_pct", "position_pct", "slope", "rsi", "rsi_signal"]].rename(columns={
-                    "code": "コード", "name": "銘柄名", "latest_close": "直近終値",
-                    "range_low": "下限", "range_high": "上限",
-                    "range_pct": "レンジ幅%", "position_pct": "位置%", "slope": "傾き",
-                    "rsi": "RSI", "rsi_signal": "RSIシグナル",
-                })
+                pick_display = high_picks[
+                    [
+                        "code",
+                        "name",
+                        "latest_close",
+                        "range_low",
+                        "range_high",
+                        "range_pct",
+                        "position_pct",
+                        "slope",
+                        "rsi",
+                        "rsi_signal",
+                    ]
+                ].rename(
+                    columns={
+                        "code": "コード",
+                        "name": "銘柄名",
+                        "latest_close": "直近終値",
+                        "range_low": "下限",
+                        "range_high": "上限",
+                        "range_pct": "レンジ幅%",
+                        "position_pct": "位置%",
+                        "slope": "傾き",
+                        "rsi": "RSI",
+                        "rsi_signal": "RSIシグナル",
+                    }
+                )
                 event_high = st.dataframe(
-                    pick_display, use_container_width=True, hide_index=True,
-                    on_select="rerun", selection_mode="single-row",
+                    pick_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
                     key="picks_high",
                 )
                 if event_high and event_high.selection and event_high.selection.rows:
@@ -641,17 +755,36 @@ def show_list_view():
         if "sector_33" in filtered.columns:
             sector_mc_totals = results.groupby("sector_33")["market_cap"].sum()
             filtered["sector_mc_pct"] = filtered.apply(
-                lambda r: round(float(r["market_cap"]) / float(sector_mc_totals[r["sector_33"]]) * 100, 1)
-                if pd.notna(r.get("market_cap")) and r.get("sector_33") in sector_mc_totals.index
-                and sector_mc_totals[r["sector_33"]] > 0
-                else None,
+                lambda r: (
+                    round(
+                        float(r["market_cap"])
+                        / float(sector_mc_totals[r["sector_33"]])
+                        * 100,
+                        1,
+                    )
+                    if pd.notna(r.get("market_cap"))
+                    and r.get("sector_33") in sector_mc_totals.index
+                    and sector_mc_totals[r["sector_33"]] > 0
+                    else None
+                ),
                 axis=1,
             )
 
     display_cols = [
-        "code", "name", "size_category", "sector_33", "wave_types",
-        "range_pct", "touch_total", "slope", "atr", "breakout_days",
-        "per", "pbr", "market_cap_oku", "sector_mc_pct",
+        "code",
+        "name",
+        "size_category",
+        "sector_33",
+        "wave_types",
+        "range_pct",
+        "touch_total",
+        "slope",
+        "atr",
+        "breakout_days",
+        "per",
+        "pbr",
+        "market_cap_oku",
+        "sector_mc_pct",
     ]
     display_names = {
         "code": "コード",
@@ -671,7 +804,9 @@ def show_list_view():
     }
 
     available_cols = [c for c in display_cols if c in filtered.columns]
-    display_df = filtered[available_cols].rename(columns=display_names).reset_index(drop=True)
+    display_df = (
+        filtered[available_cols].rename(columns=display_names).reset_index(drop=True)
+    )
 
     event = st.dataframe(
         display_df,
@@ -720,7 +855,9 @@ def show_detail_view():
     # ヘッダー
     size_cat = row["size_category"].replace("TOPIX ", "") if row is not None else ""
     sector_33 = row.get("sector_33", "") if row is not None else ""
-    wave_types_str = row["wave_types"] if row is not None and pd.notna(row["wave_types"]) else ""
+    wave_types_str = (
+        row["wave_types"] if row is not None and pd.notna(row["wave_types"]) else ""
+    )
     st.title(f"{code} {name}")
 
     # 波形タイプをタグ風に表示（results.csvの値 = デフォルト窓）
@@ -732,7 +869,9 @@ def show_detail_view():
     # チャート設定（指標カードの前に配置 → 窓選択を先に取得）
     col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
-        chart_type = st.radio("チャートタイプ", ["ローソク足", "ライン"], horizontal=True)
+        chart_type = st.radio(
+            "チャートタイプ", ["ローソク足", "ライン"], horizontal=True
+        )
     with col_b:
         window = st.radio("評価窓", WINDOW_OPTIONS, index=1, horizontal=True)
     with col_c:
@@ -780,15 +919,32 @@ def show_detail_view():
         # フォールバック: results.csvの値
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("レンジ幅", f"{row.get('range_pct', '-')}%")
-        c2.metric("上タッチ", f"{int(row['touch_high'])}回" if pd.notna(row.get("touch_high")) else "-")
-        c3.metric("下タッチ", f"{int(row['touch_low'])}回" if pd.notna(row.get("touch_low")) else "-")
+        c2.metric(
+            "上タッチ",
+            f"{int(row['touch_high'])}回" if pd.notna(row.get("touch_high")) else "-",
+        )
+        c3.metric(
+            "下タッチ",
+            f"{int(row['touch_low'])}回" if pd.notna(row.get("touch_low")) else "-",
+        )
         c4.metric("傾き", f"{row.get('slope', '-')}")
 
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("ATR", f"{row.get('atr', '-')}")
-        c6.metric("レンジ外日数", f"{int(row['breakout_days'])}日" if pd.notna(row.get("breakout_days")) else "-")
-        c7.metric("上限", f"¥{row['range_high']:,.0f}" if pd.notna(row.get("range_high")) else "-")
-        c8.metric("下限", f"¥{row['range_low']:,.0f}" if pd.notna(row.get("range_low")) else "-")
+        c6.metric(
+            "レンジ外日数",
+            f"{int(row['breakout_days'])}日"
+            if pd.notna(row.get("breakout_days"))
+            else "-",
+        )
+        c7.metric(
+            "上限",
+            f"¥{row['range_high']:,.0f}" if pd.notna(row.get("range_high")) else "-",
+        )
+        c8.metric(
+            "下限",
+            f"¥{row['range_low']:,.0f}" if pd.notna(row.get("range_low")) else "-",
+        )
 
         c9, c10, _, _ = st.columns(4)
         per_val = row.get("per")
@@ -818,7 +974,11 @@ def show_detail_view():
             )
             # 個別銘柄の時価総額比率
             has_mc = "market_cap" in results.columns
-            stock_mc = float(row["market_cap"]) if has_mc and pd.notna(row.get("market_cap")) else None
+            stock_mc = (
+                float(row["market_cap"])
+                if has_mc and pd.notna(row.get("market_cap"))
+                else None
+            )
             sector_mc_total = sr.get("market_cap_total")
             if stock_mc is not None and sector_mc_total and sector_mc_total > 0:
                 stock_mc_oku = stock_mc / 1e8
@@ -840,12 +1000,14 @@ def show_detail_view():
         fig_fin = build_financials_chart(financials)
         st.plotly_chart(fig_fin, use_container_width=True)
         # 表形式でも表示
-        fin_display = financials.rename(columns={
-            "period": "期間",
-            "revenue": "売上高（億円）",
-            "op_margin": "営業利益率（%）",
-            "is_forecast": "予測",
-        })
+        fin_display = financials.rename(
+            columns={
+                "period": "期間",
+                "revenue": "売上高（億円）",
+                "op_margin": "営業利益率（%）",
+                "is_forecast": "予測",
+            }
+        )
         st.dataframe(fin_display, use_container_width=True, hide_index=True)
     else:
         st.caption("財務データを取得できませんでした。")
@@ -867,14 +1029,20 @@ def show_detail_view():
     # 比較銘柄選択
     comparison_tickers = []
     if results is not None:
-        ticker_options = results[results["ticker"] != ticker][["ticker", "code", "name", "sector_33"]].copy()
+        ticker_options = results[results["ticker"] != ticker][
+            ["ticker", "code", "name", "sector_33"]
+        ].copy()
         ticker_options["label"] = ticker_options["code"] + " " + ticker_options["name"]
 
         # 同業種抽出ボタン
         comp_col1, comp_col2 = st.columns([1, 3])
         with comp_col1:
-            if sector_33 and st.button(f"同業種を選択（{sector_33}）", key="btn_same_sector"):
-                same_sector = ticker_options[ticker_options["sector_33"] == sector_33]["label"].tolist()
+            if sector_33 and st.button(
+                f"同業種を選択（{sector_33}）", key="btn_same_sector"
+            ):
+                same_sector = ticker_options[ticker_options["sector_33"] == sector_33][
+                    "label"
+                ].tolist()
                 st.session_state["comparison_stocks"] = same_sector[:5]
                 st.rerun()
 
@@ -885,7 +1053,9 @@ def show_detail_view():
             key="comparison_stocks",
         )
         if selected_labels:
-            comparison_tickers = ticker_options[ticker_options["label"].isin(selected_labels)]["ticker"].tolist()
+            comparison_tickers = ticker_options[
+                ticker_options["label"].isin(selected_labels)
+            ]["ticker"].tolist()
 
     # オーバーレイデータ構築
     overlays = []
@@ -895,7 +1065,13 @@ def show_detail_view():
     if show_sector and sector_33 and results is not None:
         sector_index_df = compute_sector_index(sector_33, results)
         if sector_index_df is not None:
-            overlays.append({"name": f"33業種: {sector_33}", "data": sector_index_df, "color": "#FF5722"})
+            overlays.append(
+                {
+                    "name": f"33業種: {sector_33}",
+                    "data": sector_index_df,
+                    "color": "#FF5722",
+                }
+            )
 
     if show_nikkei:
         nikkei_df = get_nikkei225()
@@ -904,7 +1080,11 @@ def show_detail_view():
 
     # 決算発表予定日の取得
     earnings_df = load_earnings_dates()
-    earnings_dates = get_earnings_dates_for_code(code, earnings_df) if earnings_df is not None else []
+    earnings_dates = (
+        get_earnings_dates_for_code(code, earnings_df)
+        if earnings_df is not None
+        else []
+    )
 
     # チャート描画（リアルタイムのrange値を使用）
     if df is not None:
@@ -929,7 +1109,9 @@ def show_detail_view():
         st.warning("株価データが見つかりません。バッチ更新を実行してください。")
 
     # === 比較チャート＋相関係数 ===
-    if df is not None and (comparison_tickers or (overlays and comparison_tickers is not None)):
+    if df is not None and (
+        comparison_tickers or (overlays and comparison_tickers is not None)
+    ):
         # 比較対象のデータを収集
         comp_data_list = []
         return_data = {}
@@ -946,8 +1128,16 @@ def show_detail_view():
                 with st.spinner(f"比較銘柄の株価データを取得中: {comp_ticker} ..."):
                     comp_df = _get_price_data_cached(comp_ticker)
             if comp_df is not None:
-                comp_row = results[results["ticker"] == comp_ticker].iloc[0] if results is not None else None
-                comp_label = f"{comp_row['code']} {comp_row['name']}" if comp_row is not None else comp_ticker
+                comp_row = (
+                    results[results["ticker"] == comp_ticker].iloc[0]
+                    if results is not None
+                    else None
+                )
+                comp_label = (
+                    f"{comp_row['code']} {comp_row['name']}"
+                    if comp_row is not None
+                    else comp_ticker
+                )
                 comp_data_list.append({"name": comp_label, "data": comp_df})
                 comp_w = comp_df[comp_df.index >= main_w.index[0]]
                 if len(comp_w) > 1:
@@ -1021,14 +1211,19 @@ def show_strategy_view():
         col1.metric("最大保有数", exec_cfg.get("max_positions", 20))
         col2.metric("リバランス", exec_cfg.get("rebalance", "weekly"))
         col3.metric("エントリー", exec_cfg.get("entry_timing", "next_open"))
-        col4.metric("取引コスト", f"{exec_cfg.get('transaction_cost_roundtrip', 0.003)*100:.1f}%")
+        col4.metric(
+            "取引コスト",
+            f"{exec_cfg.get('transaction_cost_roundtrip', 0.003) * 100:.1f}%",
+        )
 
         st.markdown("**パターン定義:**")
         patterns_cfg = strategy.get("patterns", {})
         for pat_name, pat_cfg in patterns_cfg.items():
             label = PATTERN_LABELS.get(pat_name, pat_name)
             notes = pat_cfg.get("notes", "")
-            base_pts = strategy.get("scoring", {}).get("base_points", {}).get(pat_name, "?")
+            base_pts = (
+                strategy.get("scoring", {}).get("base_points", {}).get(pat_name, "?")
+            )
             st.markdown(f"- **{label}** (基本点: {base_pts}) — {notes}")
 
     # データ更新日時
@@ -1054,7 +1249,9 @@ def show_strategy_view():
     # ランキング生成
     stock_list_df = None
     if STOCK_LIST_CSV.exists():
-        stock_list_df = pd.read_csv(STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str})
+        stock_list_df = pd.read_csv(
+            STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str}
+        )
 
     if stock_list_df is None or len(stock_list_df) == 0:
         st.error("銘柄リストがありません。先にバッチ更新を実行してください。")
@@ -1067,7 +1264,9 @@ def show_strategy_view():
     else:
         # キャッシュデータの存在確認
         if not CACHE_DIR.exists() or len(list(CACHE_DIR.glob("*.parquet"))) == 0:
-            st.warning("株価キャッシュデータがありません。バッチ更新を実行してください。")
+            st.warning(
+                "株価キャッシュデータがありません。バッチ更新を実行してください。"
+            )
             st.code("cd jpx500_wave_analysis && python batch/update.py")
             return
 
@@ -1104,19 +1303,29 @@ def show_strategy_view():
     st.markdown("### シグナル集計")
     pat_cols = st.columns(len(PATTERN_LABELS))
     for i, (pat_key, pat_label) in enumerate(PATTERN_LABELS.items()):
-        count = ranking["matched_patterns"].apply(
-            lambda x, _p=pat_key: _p in str(x)
-        ).sum()
+        count = (
+            ranking["matched_patterns"].apply(lambda x, _p=pat_key: _p in str(x)).sum()
+        )
         pat_cols[i].metric(pat_label, f"{count}銘柄")
 
     # ランキングテーブル
     st.markdown(f"### 推奨ランキング ({len(filtered_ranking)}銘柄)")
 
     display_cols = [
-        "code", "name", "size_category", "sector_33",
-        "best_pattern", "best_score", "matched_patterns",
-        "close", "rsi", "atr_pct", "volume_ratio",
-        "vs_sma50", "vs_sma200", "turnover_rank_pct",
+        "code",
+        "name",
+        "size_category",
+        "sector_33",
+        "best_pattern",
+        "best_score",
+        "matched_patterns",
+        "close",
+        "rsi",
+        "atr_pct",
+        "volume_ratio",
+        "vs_sma50",
+        "vs_sma200",
+        "turnover_rank_pct",
     ]
     display_names = {
         "code": "コード",
@@ -1188,7 +1397,9 @@ def show_backtest_view():
 
     missing = [p for p in [summary_fp, trades_fp, monthly_fp] if not p.exists()]
     if missing:
-        st.error("バックテスト結果CSVが不足しています。先に batch/backtest.py を実行してください。")
+        st.error(
+            "バックテスト結果CSVが不足しています。先に batch/backtest.py を実行してください。"
+        )
         st.write("不足:")
         for p in missing:
             st.write(f"- {p}")
@@ -1226,7 +1437,9 @@ def show_backtest_view():
         if c in trades.columns:
             trades[c] = pd.to_numeric(trades[c], errors="coerce")
 
-    policies = [p for p in ["fixed_amount", "fixed_rate"] if p in set(summary.get("policy", []))]
+    policies = [
+        p for p in ["fixed_amount", "fixed_rate"] if p in set(summary.get("policy", []))
+    ]
     if not policies:
         policies = sorted(summary["policy"].dropna().unique().tolist())
 
@@ -1262,8 +1475,16 @@ def show_backtest_view():
     from plotly.subplots import make_subplots
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=m["ym"], y=m["trades_closed"], name="trades_closed", opacity=0.6), secondary_y=False)
-    fig.add_trace(go.Scatter(x=m["ym"], y=m["win_rate"] * 100.0, name="win_rate(%)", mode="lines+markers"), secondary_y=True)
+    fig.add_trace(
+        go.Bar(x=m["ym"], y=m["trades_closed"], name="trades_closed", opacity=0.6),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=m["ym"], y=m["win_rate"] * 100.0, name="win_rate(%)", mode="lines+markers"
+        ),
+        secondary_y=True,
+    )
     fig.update_layout(
         height=380,
         margin=dict(l=10, r=10, t=30, b=10),
@@ -1275,7 +1496,11 @@ def show_backtest_view():
     st.plotly_chart(fig, use_container_width=True)
 
     fig2 = go.Figure()
-    exit_cols = [c for c in ["rebalance_drop", "time_exit", "trailing_atr", "trend_exit"] if c in m.columns]
+    exit_cols = [
+        c
+        for c in ["rebalance_drop", "time_exit", "trailing_atr", "trend_exit"]
+        if c in m.columns
+    ]
     for col in exit_cols:
         fig2.add_trace(go.Bar(x=m["ym"], y=m[col], name=col))
     fig2.update_layout(
@@ -1290,7 +1515,14 @@ def show_backtest_view():
 
     # 月次リターン
     fig3 = go.Figure()
-    fig3.add_trace(go.Scatter(x=m["ym"], y=m["month_return_pct"], name="month_return_pct", mode="lines+markers"))
+    fig3.add_trace(
+        go.Scatter(
+            x=m["ym"],
+            y=m["month_return_pct"],
+            name="month_return_pct",
+            mode="lines+markers",
+        )
+    )
     fig3.update_layout(
         height=320,
         title="月次リターン(%)",
@@ -1306,7 +1538,11 @@ def show_backtest_view():
 
     pat = (
         t.groupby("pattern", dropna=False)
-        .agg(trade_count=("pnl", "size"), win_rate=("is_win", "mean"), avg_return_pct=("return_pct", "mean"))
+        .agg(
+            trade_count=("pnl", "size"),
+            win_rate=("is_win", "mean"),
+            avg_return_pct=("return_pct", "mean"),
+        )
         .reset_index()
         .sort_values("trade_count", ascending=False)
     )
@@ -1338,29 +1574,42 @@ def show_backtest_view():
         aspect="auto",
         title="Pattern × Exit reason（件数）",
     )
-    fig5.update_layout(height=max(380, 28 * len(ct.index)), margin=dict(l=10, r=10, t=50, b=10))
+    fig5.update_layout(
+        height=max(380, 28 * len(ct.index)), margin=dict(l=10, r=10, t=50, b=10)
+    )
     st.plotly_chart(fig5, use_container_width=True)
 
     # --- 負け要因（RSI） ---
     st.subheader("負け要因（RSI帯 × exit理由 など）")
     if enriched is None or enriched.empty:
-        st.info("data/backtest_trades_enriched.csv が無いため、RSI要因の可視化はスキップします。")
+        st.info(
+            "data/backtest_trades_enriched.csv が無いため、RSI要因の可視化はスキップします。"
+        )
     else:
         e = enriched[enriched["policy"] == policy].copy()
         for c in ["pnl", "return_pct", "rsi_signal"]:
             if c in e.columns:
                 e[c] = pd.to_numeric(e[c], errors="coerce")
-        loss = e[e.get("is_loss", False) == True].copy() if "is_loss" in e.columns else e[e["pnl"] < 0].copy()  # noqa: E712
+        loss = (
+            e[e.get("is_loss", False) == True].copy()  # noqa: E712  (pandas mask)
+            if "is_loss" in e.columns
+            else e[e["pnl"] < 0].copy()
+        )
         if loss.empty:
             st.write("負けトレードがありません。")
         else:
             if "rsi_bin" in loss.columns and "exit_reason" in loss.columns:
-                ctl = pd.crosstab(loss["rsi_bin"].fillna("unknown"), loss["exit_reason"].fillna("unknown"))
+                ctl = pd.crosstab(
+                    loss["rsi_bin"].fillna("unknown"),
+                    loss["exit_reason"].fillna("unknown"),
+                )
                 share = ctl.div(ctl.sum(axis=1).replace(0, pd.NA), axis=0).fillna(0)
 
                 fig6 = go.Figure()
                 for col in share.columns:
-                    fig6.add_trace(go.Bar(x=share.index.astype(str), y=share[col], name=str(col)))
+                    fig6.add_trace(
+                        go.Bar(x=share.index.astype(str), y=share[col], name=str(col))
+                    )
                 fig6.update_layout(
                     barmode="stack",
                     height=380,
@@ -1380,7 +1629,11 @@ def show_backtest_view():
                 fig7.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10))
                 st.plotly_chart(fig7, use_container_width=True)
 
-            if "rsi_signal" in loss.columns and "return_pct" in loss.columns and "exit_reason" in loss.columns:
+            if (
+                "rsi_signal" in loss.columns
+                and "return_pct" in loss.columns
+                and "exit_reason" in loss.columns
+            ):
                 fig8 = px.scatter(
                     loss,
                     x="rsi_signal",
@@ -1395,7 +1648,9 @@ def show_backtest_view():
     # --- シナリオ比較（summary_grid.csv） ---
     st.subheader("シナリオ比較（summary_grid.csv）")
     if grid is None or grid.empty:
-        st.info("data/scenarios/summary_grid.csv が無いため、シナリオ比較はスキップします。")
+        st.info(
+            "data/scenarios/summary_grid.csv が無いため、シナリオ比較はスキップします。"
+        )
         return
 
     g = grid[grid["policy"] == policy].copy()
@@ -1411,11 +1666,17 @@ def show_backtest_view():
         hover_data=["total_return_pct", "trade_count"],
         title="CAGR × 最大DD（点=シナリオ）",
     )
-    fig9.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
+    fig9.update_layout(
+        height=420, margin=dict(l=10, r=10, t=50, b=10), showlegend=False
+    )
     st.plotly_chart(fig9, use_container_width=True)
 
     top_n = st.slider("上位表示数", 5, 30, 12)
-    metric = st.selectbox("ランキング指標", ["total_return_pct", "cagr", "max_drawdown", "trade_count"], index=0)
+    metric = st.selectbox(
+        "ランキング指標",
+        ["total_return_pct", "cagr", "max_drawdown", "trade_count"],
+        index=0,
+    )
     ascending = metric in {"max_drawdown"}
     top = g.sort_values(metric, ascending=ascending).head(top_n)
     fig10 = px.bar(
@@ -1424,21 +1685,31 @@ def show_backtest_view():
         y=metric,
         title=f"上位{top_n}: {metric}",
     )
-    fig10.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10), xaxis_tickangle=45)
+    fig10.update_layout(
+        height=380, margin=dict(l=10, r=10, t=50, b=10), xaxis_tickangle=45
+    )
     st.plotly_chart(fig10, use_container_width=True)
 
     # equity curve compare
     st.subheader("エクイティカーブ比較（シナリオ別）")
     scenario_options = sorted(g["scenario"].dropna().unique().tolist())
-    baseline = next((s for s in scenario_options if str(s).startswith("S0_baseline")), None)
-    best = str(g.sort_values("cagr", ascending=False).iloc[0]["scenario"]) if len(g) else None
+    baseline = next(
+        (s for s in scenario_options if str(s).startswith("S0_baseline")), None
+    )
+    best = (
+        str(g.sort_values("cagr", ascending=False).iloc[0]["scenario"])
+        if len(g)
+        else None
+    )
     default_sel = [x for x in [baseline, best] if x]
     selected = st.multiselect(
         "比較するシナリオ",
         options=scenario_options,
         default=default_sel,
     )
-    include_nikkei = st.checkbox("日経225（Buy&Hold）も重ねる（元本1000万に補正）", value=True)
+    include_nikkei = st.checkbox(
+        "日経225（Buy&Hold）も重ねる（元本1000万に補正）", value=True
+    )
     if selected:
         curves = []
         for scen in selected:
@@ -1457,15 +1728,22 @@ def show_backtest_view():
             dfc = pd.concat(curves, ignore_index=True)
 
             if include_nikkei:
+
                 @st.cache_data(ttl=3600)
                 def _load_nikkei() -> pd.DataFrame | None:
                     return get_nikkei225()
 
                 nikkei = _load_nikkei()
                 if nikkei is None or nikkei.empty:
-                    st.info("日経225データ（^N225）を取得できませんでした。ネットワークやキャッシュを確認してください。")
+                    st.info(
+                        "日経225データ（^N225）を取得できませんでした。ネットワークやキャッシュを確認してください。"
+                    )
                 else:
-                    close_col = "Close" if "Close" in nikkei.columns else ("close" if "close" in nikkei.columns else None)
+                    close_col = (
+                        "Close"
+                        if "Close" in nikkei.columns
+                        else ("close" if "close" in nikkei.columns else None)
+                    )
                     if close_col is None:
                         st.info("日経225データに Close 列がありませんでした。")
                     else:
@@ -1480,17 +1758,25 @@ def show_backtest_view():
 
                         if len(nk) >= 2:
                             base = float(srow.get("initial_capital", 10_000_000.0))
-                            c0 = float(pd.to_numeric(nk[close_col].iloc[0], errors="coerce"))
+                            c0 = float(
+                                pd.to_numeric(nk[close_col].iloc[0], errors="coerce")
+                            )
                             if c0 and pd.notna(c0):
-                                equity_nk = base * (pd.to_numeric(nk[close_col], errors="coerce") / c0)
-                                add = pd.DataFrame({
-                                    "date": nk.index,
-                                    "equity": equity_nk,
-                                    "scenario": "Nikkei225_BuyHold",
-                                })
+                                equity_nk = base * (
+                                    pd.to_numeric(nk[close_col], errors="coerce") / c0
+                                )
+                                add = pd.DataFrame(
+                                    {
+                                        "date": nk.index,
+                                        "equity": equity_nk,
+                                        "scenario": "Nikkei225_BuyHold",
+                                    }
+                                )
                                 dfc = pd.concat([dfc, add], ignore_index=True)
 
-            fig11 = px.line(dfc, x="date", y="equity", color="scenario", title="Equity curve")
+            fig11 = px.line(
+                dfc, x="date", y="equity", color="scenario", title="Equity curve"
+            )
             fig11.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
             st.plotly_chart(fig11, use_container_width=True)
         else:
@@ -1504,23 +1790,36 @@ import numpy as np  # noqa: E402  (already available via plotly deps)
 
 
 _STYLE_OPTIMIZER_PATTERNS: dict[str, set[str]] = {
-    "全(A+B+C+D)":     {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
-    "全(A+B+C+D+E)":   {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim"},
-    "全(A+B+C+D+E+F)": {"A_trend", "B_pullback", "C_breakout", "D_reversal", "E_can_slim", "F_turnaround"},
-    "A+B+C":           {"A_trend", "B_pullback", "C_breakout"},
-    "A+B+C+E":         {"A_trend", "B_pullback", "C_breakout", "E_can_slim"},
-    "A+B+C+F":         {"A_trend", "B_pullback", "C_breakout", "F_turnaround"},
-    "A+B":             {"A_trend", "B_pullback"},
-    "A+C":             {"A_trend", "C_breakout"},
-    "B+C":             {"B_pullback", "C_breakout"},
-    "Aのみ":           {"A_trend"},
-    "Cのみ":           {"C_breakout"},
-    "Eのみ":           {"E_can_slim"},
-    "Fのみ":           {"F_turnaround"},
+    "全(A+B+C+D)": {"A_trend", "B_pullback", "C_breakout", "D_reversal"},
+    "全(A+B+C+D+E)": {
+        "A_trend",
+        "B_pullback",
+        "C_breakout",
+        "D_reversal",
+        "E_can_slim",
+    },
+    "全(A+B+C+D+E+F)": {
+        "A_trend",
+        "B_pullback",
+        "C_breakout",
+        "D_reversal",
+        "E_can_slim",
+        "F_turnaround",
+    },
+    "A+B+C": {"A_trend", "B_pullback", "C_breakout"},
+    "A+B+C+E": {"A_trend", "B_pullback", "C_breakout", "E_can_slim"},
+    "A+B+C+F": {"A_trend", "B_pullback", "C_breakout", "F_turnaround"},
+    "A+B": {"A_trend", "B_pullback"},
+    "A+C": {"A_trend", "C_breakout"},
+    "B+C": {"B_pullback", "C_breakout"},
+    "Aのみ": {"A_trend"},
+    "Cのみ": {"C_breakout"},
+    "Eのみ": {"E_can_slim"},
+    "Fのみ": {"F_turnaround"},
 }
 
 _STYLE_HOLDING_DAYS = {
-    "短期（5〜20日）":  [5, 10, 15, 20],
+    "短期（5〜20日）": [5, 10, 15, 20],
     "中期（30〜60日）": [30, 60],
     "長期（120〜252日）": [120, 252],
 }
@@ -1592,13 +1891,29 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
     import plotly.graph_objects as go
 
     df = pd.read_csv(opt_csv, encoding="utf-8-sig")
-    for c in ["total_return_pct", "cagr", "max_drawdown", "sharpe", "win_rate",
-              "trade_count", "beats_nikkei", "excess_return_pct"]:
+    for c in [
+        "total_return_pct",
+        "cagr",
+        "max_drawdown",
+        "sharpe",
+        "win_rate",
+        "trade_count",
+        "beats_nikkei",
+        "excess_return_pct",
+    ]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    nikkei_total = float(df["nikkei_total_return_pct"].dropna().iloc[0]) if "nikkei_total_return_pct" in df.columns else 0.0
-    nikkei_cagr = float(df["nikkei_cagr"].dropna().iloc[0]) if "nikkei_cagr" in df.columns else 0.0
+    nikkei_total = (
+        float(df["nikkei_total_return_pct"].dropna().iloc[0])
+        if "nikkei_total_return_pct" in df.columns
+        else 0.0
+    )
+    nikkei_cagr = (
+        float(df["nikkei_cagr"].dropna().iloc[0])
+        if "nikkei_cagr" in df.columns
+        else 0.0
+    )
 
     # 日経225指標
     st.subheader("📊 日経225 ベンチマーク（Buy & Hold）")
@@ -1627,8 +1942,11 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
             st.markdown(f"**【{style_name}】** {badge}")
             st.markdown(f"保有日数: **{int(best['holding_days'])}日**")
             st.markdown(f"パターン: **{best['pattern_combo']}**")
-            st.metric("総リターン", f"{best.get('total_return_pct', 0):+.2f}%",
-                      delta=f"vs 日経 {best.get('excess_return_pct', 0):+.2f}%")
+            st.metric(
+                "総リターン",
+                f"{best.get('total_return_pct', 0):+.2f}%",
+                delta=f"vs 日経 {best.get('excess_return_pct', 0):+.2f}%",
+            )
             st.metric("CAGR", f"{best.get('cagr', 0):.4f}")
             st.metric("最大DD", f"{best.get('max_drawdown', 0):.4f}")
             st.metric("Sharpe", f"{best.get('sharpe', 0):.4f}")
@@ -1636,7 +1954,9 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
 
     # フィルタ付きランキング表
     st.subheader("📋 全シナリオ 成績一覧")
-    filter_beats = st.checkbox("日経225を上回る設定のみ表示", value=True, key="opt_filter_beats")
+    filter_beats = st.checkbox(
+        "日経225を上回る設定のみ表示", value=True, key="opt_filter_beats"
+    )
     filter_styles = st.multiselect(
         "スタイル絞り込み",
         options=["短期", "中期", "長期"],
@@ -1653,16 +1973,29 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
     show = show.sort_values("cagr", ascending=False)
 
     display_cols = [
-        "style", "holding_days", "pattern_combo",
-        "total_return_pct", "excess_return_pct",
-        "cagr", "max_drawdown", "sharpe", "win_rate", "trade_count",
+        "style",
+        "holding_days",
+        "pattern_combo",
+        "total_return_pct",
+        "excess_return_pct",
+        "cagr",
+        "max_drawdown",
+        "sharpe",
+        "win_rate",
+        "trade_count",
     ]
     display_cols = [c for c in display_cols if c in show.columns]
     rename_map = {
-        "style": "スタイル", "holding_days": "保有日数", "pattern_combo": "パターン",
-        "total_return_pct": "総リターン%", "excess_return_pct": "超過リターン%",
-        "cagr": "CAGR", "max_drawdown": "最大DD", "sharpe": "Sharpe",
-        "win_rate": "勝率", "trade_count": "取引数",
+        "style": "スタイル",
+        "holding_days": "保有日数",
+        "pattern_combo": "パターン",
+        "total_return_pct": "総リターン%",
+        "excess_return_pct": "超過リターン%",
+        "cagr": "CAGR",
+        "max_drawdown": "最大DD",
+        "sharpe": "Sharpe",
+        "win_rate": "勝率",
+        "trade_count": "取引数",
     }
     st.dataframe(
         show[display_cols].rename(columns=rename_map),
@@ -1678,7 +2011,11 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
             eq_df["date"] = pd.to_datetime(eq_df["date"], errors="coerce")
             eq_df["equity"] = pd.to_numeric(eq_df["equity"], errors="coerce")
 
-            scenario_options = [s for s in eq_df["scenario_id"].dropna().unique() if s != "Nikkei225_BuyHold"]
+            scenario_options = [
+                s
+                for s in eq_df["scenario_id"].dropna().unique()
+                if s != "Nikkei225_BuyHold"
+            ]
             beats_set = set(df[df["beats_nikkei"] == True]["scenario_id"].tolist())  # noqa: E712
             default_scenarios = [s for s in scenario_options if s in beats_set][:5]
 
@@ -1699,17 +2036,19 @@ def _show_precomputed_results(opt_csv: Path, equity_csv: Path) -> None:
                     if sub.empty:
                         continue
                     is_nikkei = scen == "Nikkei225_BuyHold"
-                    fig.add_trace(go.Scatter(
-                        x=sub["date"],
-                        y=sub["equity"],
-                        name=scen,
-                        line=dict(
-                            width=3 if is_nikkei else 1.5,
-                            dash="dash" if is_nikkei else "solid",
-                            color="orange" if is_nikkei else None,
-                        ),
-                        mode="lines",
-                    ))
+                    fig.add_trace(
+                        go.Scatter(
+                            x=sub["date"],
+                            y=sub["equity"],
+                            name=scen,
+                            line=dict(
+                                width=3 if is_nikkei else 1.5,
+                                dash="dash" if is_nikkei else "solid",
+                                color="orange" if is_nikkei else None,
+                            ),
+                            mode="lines",
+                        )
+                    )
                 fig.update_layout(
                     height=480,
                     title="エクイティカーブ（定額スタイル vs 日経225 Buy&Hold）",
@@ -1735,7 +2074,12 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
     with col_left:
         style_choice = st.selectbox(
             "投資スタイル",
-            options=["短期（5〜20日）", "中期（30〜60日）", "長期（120〜252日）", "カスタム"],
+            options=[
+                "短期（5〜20日）",
+                "中期（30〜60日）",
+                "長期（120〜252日）",
+                "カスタム",
+            ],
             key="custom_style",
         )
 
@@ -1780,25 +2124,43 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
             key="custom_max_pos",
         )
 
-        years = st.slider("バックテスト期間（年）", min_value=1, max_value=5, value=3, key="custom_years")
+        years = st.slider(
+            "バックテスト期間（年）",
+            min_value=1,
+            max_value=5,
+            value=3,
+            key="custom_years",
+        )
 
-        run_btn = st.button("▶ シミュレーション実行", type="primary", key="custom_run_btn")
+        run_btn = st.button(
+            "▶ シミュレーション実行", type="primary", key="custom_run_btn"
+        )
 
     with col_right:
         if not run_btn:
-            st.info("左のパラメータを設定して「シミュレーション実行」ボタンを押してください。")
+            st.info(
+                "左のパラメータを設定して「シミュレーション実行」ボタンを押してください。"
+            )
             return
 
-        with st.spinner("シミュレーション実行中...（初回はコンテキスト構築に時間がかかります）"):
-            contexts, strategy, trading_days, end_date, bench = _load_optimizer_contexts(_nikkei_cache_signature())
+        with st.spinner(
+            "シミュレーション実行中...（初回はコンテキスト構築に時間がかかります）"
+        ):
+            contexts, strategy, trading_days, end_date, bench = (
+                _load_optimizer_contexts(_nikkei_cache_signature())
+            )
 
         if contexts is None:
-            st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
+            st.error(
+                "^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。"
+            )
             return
 
         allowed_patterns = _STYLE_OPTIMIZER_PATTERNS[combo_choice]
         start_date = pd.Timestamp(end_date - pd.DateOffset(years=years))
-        td_period = trading_days[(trading_days >= start_date) & (trading_days <= end_date)]
+        td_period = trading_days[
+            (trading_days >= start_date) & (trading_days <= end_date)
+        ]
 
         if len(td_period) < 60:
             st.error("期間が短すぎます。年数を増やしてください。")
@@ -1826,7 +2188,9 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
                 return
 
         if summary_df.empty:
-            st.warning("有効な結果がありませんでした。パラメータや期間を見直してください。")
+            st.warning(
+                "有効な結果がありませんでした。パラメータや期間を見直してください。"
+            )
             return
 
         srow = summary_df.iloc[0]
@@ -1834,10 +2198,16 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
         beats = total_ret > nikkei_total
 
         # 結果メトリクス
-        badge = "✅ 日経225を上回りました！" if beats else "❌ 日経225に届きませんでした"
+        badge = (
+            "✅ 日経225を上回りました！" if beats else "❌ 日経225に届きませんでした"
+        )
         st.markdown(f"### {badge}")
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("総リターン", f"{total_ret:+.2f}%", delta=f"vs 日経 {total_ret - nikkei_total:+.2f}%")
+        m1.metric(
+            "総リターン",
+            f"{total_ret:+.2f}%",
+            delta=f"vs 日経 {total_ret - nikkei_total:+.2f}%",
+        )
         m2.metric("CAGR", f"{float(srow.get('cagr', 0)):.4f}")
         m3.metric("最大DD", f"{float(srow.get('max_drawdown', 0)):.4f}")
         m4.metric("Sharpe", f"{float(srow.get('sharpe', 0)):.4f}")
@@ -1861,20 +2231,24 @@ def _show_custom_simulation(base_dir: Path, bench_df_ref) -> None:
         nk_equity = float(initial_capital) * nk_closes / float(nk_closes.iloc[0])
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=equity_df["date"],
-            y=equity_df["equity"],
-            name=f"ABCD戦略（{holding_days}日/{combo_choice}）",
-            line=dict(color="royalblue", width=2),
-            mode="lines",
-        ))
-        fig.add_trace(go.Scatter(
-            x=nk.index,
-            y=nk_equity,
-            name="日経225 Buy&Hold",
-            line=dict(color="orange", width=2, dash="dash"),
-            mode="lines",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=equity_df["date"],
+                y=equity_df["equity"],
+                name=f"ABCD戦略（{holding_days}日/{combo_choice}）",
+                line=dict(color="royalblue", width=2),
+                mode="lines",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=nk.index,
+                y=nk_equity,
+                name="日経225 Buy&Hold",
+                line=dict(color="orange", width=2, dash="dash"),
+                mode="lines",
+            )
+        )
         fig.update_layout(
             height=420,
             title="エクイティカーブ（定額スタイル vs 日経225）",
@@ -1948,7 +2322,9 @@ def show_style_optimizer_view():
 
     bench_data = get_nikkei225()
     if bench_data is None:
-        st.error("^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。")
+        st.error(
+            "^N225 キャッシュが見つかりません。先に batch/update.py を実行してください。"
+        )
         return
 
     _show_custom_simulation(base_dir, bench_data)
@@ -1966,7 +2342,9 @@ def main():
         show_detail_view()
         return
 
-    tab1, tab2, tab3, tab4 = st.tabs(["波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"]
+    )
 
     with tab1:
         show_list_view()

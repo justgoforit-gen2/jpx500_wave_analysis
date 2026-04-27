@@ -1,4 +1,5 @@
 """ETF時価総額上位100銘柄をjpx500_list.csvに追加するスクリプト"""
+
 import sys
 import time
 from pathlib import Path
@@ -10,7 +11,7 @@ import yfinance as yf
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import STOCK_LIST_CSV
+from config.settings import STOCK_LIST_CSV  # noqa: E402  (path setup must precede import)
 
 XLSX_PATH = PROJECT_ROOT / "data" / "earnings" / "jpstocklist20260212.xlsx"
 TOP_N = 100
@@ -45,18 +46,20 @@ def fetch_market_caps(etf_df: pd.DataFrame) -> pd.DataFrame:
             info = yf.Ticker(ticker).info
             market_cap = info.get("totalAssets") or info.get("marketCap") or 0
         except Exception as e:
-            print(f"  [{i+1}/{total}] {ticker} 取得失敗: {e}")
+            print(f"  [{i + 1}/{total}] {ticker} 取得失敗: {e}")
             market_cap = 0
 
-        results.append({
-            "code": code,
-            "name": name,
-            "ticker": ticker,
-            "market_cap": market_cap,
-        })
+        results.append(
+            {
+                "code": code,
+                "name": name,
+                "ticker": ticker,
+                "market_cap": market_cap,
+            }
+        )
 
         if (i + 1) % 20 == 0 or i == total - 1:
-            print(f"  時価総額取得中... {i+1}/{total}")
+            print(f"  時価総額取得中... {i + 1}/{total}")
 
         time.sleep(0.3)
 
@@ -95,14 +98,16 @@ def main():
     new_rows = []
     for _, row in top100.iterrows():
         if row["code"] not in existing_codes:
-            new_rows.append({
-                "code": row["code"],
-                "name": row["name"],
-                "size_category": "ETF",
-                "sector_33": "ETF・ETN",
-                "sector_17": "ETF・ETN",
-                "ticker": row["ticker"],
-            })
+            new_rows.append(
+                {
+                    "code": row["code"],
+                    "name": row["name"],
+                    "size_category": "ETF",
+                    "sector_33": "ETF・ETN",
+                    "sector_17": "ETF・ETN",
+                    "ticker": row["ticker"],
+                }
+            )
 
     if not new_rows:
         print("\n追加対象なし（全て既存）")

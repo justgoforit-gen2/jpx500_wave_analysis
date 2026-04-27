@@ -1,4 +1,5 @@
 """日次バッチ更新スクリプト: データ取得 → 波形分類 → results.csv出力"""
+
 import logging
 import sys
 import time
@@ -47,7 +48,7 @@ def main():
     def progress(i, total, ticker):
         if i % 50 == 0 or i == total - 1:
             elapsed = time.time() - start_time
-            logger.info(f"  取得中... {i+1}/{total} ({ticker}) [{elapsed:.0f}秒経過]")
+            logger.info(f"  取得中... {i + 1}/{total} ({ticker}) [{elapsed:.0f}秒経過]")
 
     failures = fetch_all(progress_callback=progress)
     elapsed = time.time() - start_time
@@ -65,7 +66,9 @@ def main():
 
     # サマリー
     valid = result_df[result_df["wave_types"] != "データ不足"]
-    logger.info(f"分類成功: {len(valid)}銘柄, データ不足: {len(result_df) - len(valid)}銘柄")
+    logger.info(
+        f"分類成功: {len(valid)}銘柄, データ不足: {len(result_df) - len(valid)}銘柄"
+    )
 
     type_counts = {}
     for types_str in valid["wave_types"]:
@@ -85,7 +88,9 @@ def main():
         logger.info(f"  下タッチ（買い候補）: {len(low_touch)}銘柄")
         logger.info(f"  上タッチ（利確/ブレイク監視）: {len(high_touch)}銘柄")
         for _, p in picks_df.iterrows():
-            logger.info(f"    {p['code']} {p['name']} | {p['pick_type']} | ¥{p['latest_close']:,.0f} (位置{p['position_pct']}%)")
+            logger.info(
+                f"    {p['code']} {p['name']} | {p['pick_type']} | ¥{p['latest_close']:,.0f} (位置{p['position_pct']}%)"
+            )
 
     # Step 3.5: ABCD戦略ランキング（Cloud表示用CSV）
     logger.info("ABCD戦略ランキングを生成中...")
@@ -94,7 +99,9 @@ def main():
         stock_list_df = load_stock_list()
         ranking_df = generate_ranking(
             stock_list_df,
-            load_cached_fn=lambda t: __import__("modules.data_fetcher", fromlist=["load_cached"]).load_cached(t),
+            load_cached_fn=lambda t: __import__(
+                "modules.data_fetcher", fromlist=["load_cached"]
+            ).load_cached(t),
             strategy=strategy,
             max_positions=None,
         )
@@ -106,9 +113,12 @@ def main():
             logger.info("ABCD戦略: シグナルなし（ランキング空）")
             # ヘッダだけでも残す
             import pandas as pd
+
             pd.DataFrame().to_csv(out_path, index=False, encoding="utf-8-sig")
         else:
-            ranking_df.to_csv(out_path, index=True, index_label="rank", encoding="utf-8-sig")
+            ranking_df.to_csv(
+                out_path, index=True, index_label="rank", encoding="utf-8-sig"
+            )
             logger.info(f"ABCD戦略ランキング: {len(ranking_df)}銘柄 → {out_path}")
     except Exception as e:
         logger.warning(f"ABCD戦略ランキング生成に失敗: {e}")

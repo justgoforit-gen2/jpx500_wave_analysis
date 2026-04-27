@@ -1,4 +1,5 @@
 """strategy.yaml を読み込み、Pythonオブジェクトとして提供するローダー"""
+
 from pathlib import Path
 from typing import Any
 

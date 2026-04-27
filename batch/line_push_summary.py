@@ -61,7 +61,7 @@ def _read_picks_summary(picks_csv: Path, max_lines: int = 5) -> dict[str, Any]:
         reader = csv.DictReader(f)
         for row in reader:
             total += 1
-            pick_type = (row.get("pick_type") or "")
+            pick_type = row.get("pick_type") or ""
             if "下タッチ" in pick_type:
                 low_touch += 1
             if "上タッチ" in pick_type:
@@ -102,7 +102,11 @@ def build_message() -> str:
     results = _read_results_summary(results_csv)
     picks = _read_picks_summary(picks_csv)
 
-    status = "OK" if (update_exit_code in (None, "0", 0)) else f"NG (exit {update_exit_code})"
+    status = (
+        "OK"
+        if (update_exit_code in (None, "0", 0))
+        else f"NG (exit {update_exit_code})"
+    )
 
     lines: list[str] = []
     lines.append(f"【JPX500 日次更新】{today}")
@@ -153,7 +157,8 @@ def push_line_message(channel_access_token: str, to: str, text: str) -> None:
         method="POST",
     )
 
-    with urlopen(req, timeout=30) as resp:
+    # bandit B310: URL は LINE Messaging API への固定文字列でユーザー入力経路なし、安全。
+    with urlopen(req, timeout=30) as resp:  # nosec B310
         # 成功時は204 No Content
         if resp.status not in (200, 201, 202, 204):
             raise RuntimeError(f"LINE push failed: HTTP {resp.status}")

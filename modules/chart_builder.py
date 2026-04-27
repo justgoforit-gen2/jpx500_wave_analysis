@@ -1,5 +1,5 @@
 """Plotlyで3段チャートを生成する（メイン+売買代金+RSI）"""
-import numpy as np
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -13,8 +13,6 @@ from config.settings import (
     RSI_OVERSOLD,
     DEFAULT_WINDOW,
     TOUCH_THRESHOLD_PCT,
-    RANGE_PERCENTILE_HIGH,
-    RANGE_PERCENTILE_LOW,
 )
 
 
@@ -116,21 +114,27 @@ def build_chart(
 
         fig.add_trace(
             go.Scatter(
-                x=dates, y=bb_upper, mode="lines",
+                x=dates,
+                y=bb_upper,
+                mode="lines",
                 name=f"BB上限({BB_PERIOD},{BB_STD}σ)",
                 line=dict(color="rgba(156,39,176,0.4)", width=1),
             ),
-            row=1, col=1,
+            row=1,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=dates, y=bb_lower, mode="lines",
+                x=dates,
+                y=bb_lower,
+                mode="lines",
                 name=f"BB下限({BB_PERIOD},{BB_STD}σ)",
                 line=dict(color="rgba(156,39,176,0.4)", width=1),
                 fill="tonexty",
                 fillcolor="rgba(156,39,176,0.07)",
             ),
-            row=1, col=1,
+            row=1,
+            col=1,
         )
 
     # 評価窓ハイライト（背景色）
@@ -172,7 +176,12 @@ def build_chart(
         )
 
     # === タッチポイント表示 ===
-    if show_touch_points and range_high is not None and range_low is not None and len(df) >= window:
+    if (
+        show_touch_points
+        and range_high is not None
+        and range_low is not None
+        and len(df) >= window
+    ):
         w = df.tail(window)
         close_w = w["Close"]
         midpoint = (range_high + range_low) / 2
@@ -264,7 +273,9 @@ def build_chart(
 
     # === 中段: 売買代金 ===
     turnover = df["Close"] * df["Volume"]
-    colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(df["Close"], df["Open"])]
+    colors = [
+        "#26a69a" if c >= o else "#ef5350" for c, o in zip(df["Close"], df["Open"])
+    ]
     fig.add_trace(
         go.Bar(
             x=dates,
@@ -291,8 +302,12 @@ def build_chart(
         col=1,
     )
     # 買われすぎ / 売られすぎライン
-    fig.add_hline(y=RSI_OVERBOUGHT, line_dash="dot", line_color="red", opacity=0.5, row=3, col=1)
-    fig.add_hline(y=RSI_OVERSOLD, line_dash="dot", line_color="blue", opacity=0.5, row=3, col=1)
+    fig.add_hline(
+        y=RSI_OVERBOUGHT, line_dash="dot", line_color="red", opacity=0.5, row=3, col=1
+    )
+    fig.add_hline(
+        y=RSI_OVERSOLD, line_dash="dot", line_color="blue", opacity=0.5, row=3, col=1
+    )
     fig.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.3, row=3, col=1)
 
     # === レイアウト ===
@@ -459,7 +474,8 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
     forecast_periods = fin_df[fin_df["is_forecast"]]["period"].tolist()
     for fp in forecast_periods:
         fig.add_vrect(
-            x0=fp, x1=fp,
+            x0=fp,
+            x1=fp,
             fillcolor="rgba(255, 235, 59, 0.15)",
             line_width=0,
         )
@@ -487,8 +503,10 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
     if fin_df["is_forecast"].any():
         fig.add_annotation(
             text="※ 薄色 = アナリスト予測（参考値）",
-            xref="paper", yref="paper",
-            x=0, y=-0.12,
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=-0.12,
             showarrow=False,
             font=dict(size=10, color="gray"),
         )

@@ -29,11 +29,32 @@ def _load_stock_list() -> pd.DataFrame:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Weekly backtest -> CSV outputs")
-    ap.add_argument("--years", type=int, default=None, help="Lookback years (default: strategy.yaml evaluation.lookback_years or 3)")
-    ap.add_argument("--initial", type=float, default=10_000_000.0, help="Initial capital (JPY)")
-    ap.add_argument("--max-positions", type=int, default=None, help="Max positions (default: strategy.yaml execution.max_positions or 20)")
-    ap.add_argument("--limit", type=int, default=None, help="Limit number of tickers (debug/smoke test)")
-    ap.add_argument("--with-eps", action="store_true", help="Fetch EPS data from yfinance and apply C/A conditions to E_can_slim")
+    ap.add_argument(
+        "--years",
+        type=int,
+        default=None,
+        help="Lookback years (default: strategy.yaml evaluation.lookback_years or 3)",
+    )
+    ap.add_argument(
+        "--initial", type=float, default=10_000_000.0, help="Initial capital (JPY)"
+    )
+    ap.add_argument(
+        "--max-positions",
+        type=int,
+        default=None,
+        help="Max positions (default: strategy.yaml execution.max_positions or 20)",
+    )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of tickers (debug/smoke test)",
+    )
+    ap.add_argument(
+        "--with-eps",
+        action="store_true",
+        help="Fetch EPS data from yfinance and apply C/A conditions to E_can_slim",
+    )
     args = ap.parse_args()
 
     project_dir = Path(__file__).resolve().parents[1]
@@ -52,7 +73,9 @@ def main() -> None:
     # benchmark to define trading days
     bench = load_cached("^N225")
     if bench is None or len(bench) < 250:
-        raise RuntimeError("Missing benchmark cache for ^N225. Run daily update first to populate data/cache.")
+        raise RuntimeError(
+            "Missing benchmark cache for ^N225. Run daily update first to populate data/cache."
+        )
     bench = bench.copy()
     bench.index = pd.to_datetime(bench.index)
     bench.sort_index(inplace=True)
@@ -67,7 +90,7 @@ def main() -> None:
     if args.with_eps:
         tickers = stock_list_df["ticker"].tolist()
         if args.limit:
-            tickers = tickers[:args.limit]
+            tickers = tickers[: args.limit]
         print(f"[EPS] Fetching EPS data for {len(tickers)} tickers ...")
         eps_eligible = set()
         e_cfg = strategy.get("patterns", {}).get("E_can_slim", {})
@@ -87,7 +110,9 @@ def main() -> None:
             # 四半期EPS が None の場合は日本株でデータ未取得のためスキップ
             if qg is not None and qg < qtr_thresh:
                 continue
-            if len(ag) < 3 or not all(g is not None and g >= annual_thresh for g in ag[:3]):
+            if len(ag) < 3 or not all(
+                g is not None and g >= annual_thresh for g in ag[:3]
+            ):
                 continue
             eps_eligible.add(tkr)
             if (i + 1) % 50 == 0:
@@ -137,14 +162,26 @@ def main() -> None:
 
         monthly_equity = (
             equity2.groupby(["policy", "ym"], dropna=False)
-            .agg(month_start_equity=("equity", "first"), month_end_equity=("equity", "last"))
+            .agg(
+                month_start_equity=("equity", "first"),
+                month_end_equity=("equity", "last"),
+            )
             .reset_index()
         )
         monthly_equity["month_return_pct"] = (
-            (monthly_equity["month_end_equity"] / monthly_equity["month_start_equity"] - 1.0) * 100.0
-        )
+            monthly_equity["month_end_equity"] / monthly_equity["month_start_equity"]
+            - 1.0
+        ) * 100.0
     else:
-        monthly_equity = pd.DataFrame(columns=["policy", "ym", "month_start_equity", "month_end_equity", "month_return_pct"])
+        monthly_equity = pd.DataFrame(
+            columns=[
+                "policy",
+                "ym",
+                "month_start_equity",
+                "month_end_equity",
+                "month_return_pct",
+            ]
+        )
 
     if len(trades) > 0:
         trades2 = trades.copy()
@@ -167,21 +204,26 @@ def main() -> None:
 
         # exit reason breakdown -> wide columns
         if "exit_reason" in trades2.columns:
-            reason_counts = (
-                trades2.pivot_table(
-                    index=["policy", "ym"],
-                    columns="exit_reason",
-                    values="ticker",
-                    aggfunc="size",
-                    fill_value=0,
-                )
-                .reset_index()
-            )
+            reason_counts = trades2.pivot_table(
+                index=["policy", "ym"],
+                columns="exit_reason",
+                values="ticker",
+                aggfunc="size",
+                fill_value=0,
+            ).reset_index()
         else:
             reason_counts = pd.DataFrame(columns=["policy", "ym"])  # no-op
     else:
         monthly_trades = pd.DataFrame(
-            columns=["policy", "ym", "trades_closed", "wins", "losses", "win_rate", "total_pnl"]
+            columns=[
+                "policy",
+                "ym",
+                "trades_closed",
+                "wins",
+                "losses",
+                "win_rate",
+                "total_pnl",
+            ]
         )
         reason_counts = pd.DataFrame(columns=["policy", "ym"])  # no-op
 
@@ -210,7 +252,9 @@ def main() -> None:
     # per-symbol aggregates
     if len(trades) > 0:
         per_symbol = (
-            trades.groupby(["policy", "code", "name", "ticker", "pattern"], dropna=False)
+            trades.groupby(
+                ["policy", "code", "name", "ticker", "pattern"], dropna=False
+            )
             .agg(
                 trade_count=("ticker", "size"),
                 total_pnl=("pnl", "sum"),
@@ -222,7 +266,17 @@ def main() -> None:
         )
     else:
         per_symbol = pd.DataFrame(
-            columns=["policy", "code", "name", "ticker", "pattern", "trade_count", "total_pnl", "avg_return_pct", "win_rate"]
+            columns=[
+                "policy",
+                "code",
+                "name",
+                "ticker",
+                "pattern",
+                "trade_count",
+                "total_pnl",
+                "avg_return_pct",
+                "win_rate",
+            ]
         )
 
     summary_path = data_dir / "backtest_summary.csv"

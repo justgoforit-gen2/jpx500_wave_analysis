@@ -29,7 +29,9 @@ def _load_stock_list(project_dir: Path) -> pd.DataFrame:
     return df
 
 
-def _monthly_from_equity_and_trades(equity: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
+def _monthly_from_equity_and_trades(
+    equity: pd.DataFrame, trades: pd.DataFrame
+) -> pd.DataFrame:
     if len(equity) == 0:
         return pd.DataFrame()
     equity2 = equity.copy()
@@ -39,12 +41,14 @@ def _monthly_from_equity_and_trades(equity: pd.DataFrame, trades: pd.DataFrame) 
 
     monthly_equity = (
         equity2.groupby(["policy", "ym"], dropna=False)
-        .agg(month_start_equity=("equity", "first"), month_end_equity=("equity", "last"))
+        .agg(
+            month_start_equity=("equity", "first"), month_end_equity=("equity", "last")
+        )
         .reset_index()
     )
     monthly_equity["month_return_pct"] = (
-        (monthly_equity["month_end_equity"] / monthly_equity["month_start_equity"] - 1.0) * 100.0
-    )
+        monthly_equity["month_end_equity"] / monthly_equity["month_start_equity"] - 1.0
+    ) * 100.0
 
     if len(trades) == 0:
         monthly = monthly_equity.copy()
@@ -81,16 +85,13 @@ def _monthly_from_equity_and_trades(equity: pd.DataFrame, trades: pd.DataFrame) 
     )
 
     if "exit_reason" in trades2.columns:
-        reason_counts = (
-            trades2.pivot_table(
-                index=["policy", "ym"],
-                columns="exit_reason",
-                values="ticker",
-                aggfunc="size",
-                fill_value=0,
-            )
-            .reset_index()
-        )
+        reason_counts = trades2.pivot_table(
+            index=["policy", "ym"],
+            columns="exit_reason",
+            values="ticker",
+            aggfunc="size",
+            fill_value=0,
+        ).reset_index()
     else:
         reason_counts = pd.DataFrame(columns=["policy", "ym"])
 
@@ -102,7 +103,15 @@ def _monthly_from_equity_and_trades(equity: pd.DataFrame, trades: pd.DataFrame) 
         if col not in monthly.columns:
             monthly[col] = 0
 
-    for col in ["trades_closed", "wins", "losses", "rebalance_drop", "time_exit", "trailing_atr", "trend_exit"]:
+    for col in [
+        "trades_closed",
+        "wins",
+        "losses",
+        "rebalance_drop",
+        "time_exit",
+        "trailing_atr",
+        "trend_exit",
+    ]:
         monthly[col] = monthly[col].fillna(0).astype(int)
     monthly["win_rate"] = monthly["win_rate"].fillna(0.0)
     monthly["total_pnl"] = monthly["total_pnl"].fillna(0.0)
@@ -111,8 +120,12 @@ def _monthly_from_equity_and_trades(equity: pd.DataFrame, trades: pd.DataFrame) 
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Run scenario grid for (1)(2)(3) improvements")
-    ap.add_argument("--limit", type=int, default=None, help="Limit tickers for smoke test")
+    ap = argparse.ArgumentParser(
+        description="Run scenario grid for (1)(2)(3) improvements"
+    )
+    ap.add_argument(
+        "--limit", type=int, default=None, help="Limit tickers for smoke test"
+    )
     ap.add_argument("--years", type=int, default=None)
     ap.add_argument("--initial", type=float, default=10_000_000.0)
     ap.add_argument("--max-positions", type=int, default=None)
@@ -138,13 +151,25 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     strategy = load_strategy(project_dir / "config" / "strategy.yaml")
-    lookback_years = int(args.years) if args.years is not None else int(strategy.get("evaluation", {}).get("lookback_years", 3))
-    max_positions_default = int(args.max_positions) if args.max_positions is not None else int(strategy.get("execution", {}).get("max_positions", 20))
+    lookback_years = (
+        int(args.years)
+        if args.years is not None
+        else int(strategy.get("evaluation", {}).get("lookback_years", 3))
+    )
+    max_positions_default = (
+        int(args.max_positions)
+        if args.max_positions is not None
+        else int(strategy.get("execution", {}).get("max_positions", 20))
+    )
     if args.positions_grid:
         try:
-            max_positions_grid = [int(x.strip()) for x in str(args.positions_grid).split(",") if x.strip()]
+            max_positions_grid = [
+                int(x.strip()) for x in str(args.positions_grid).split(",") if x.strip()
+            ]
         except Exception:
-            raise ValueError("Invalid --positions-grid. Use comma-separated integers like '5,10,20'.")
+            raise ValueError(
+                "Invalid --positions-grid. Use comma-separated integers like '5,10,20'."
+            )
         if not max_positions_grid:
             raise ValueError("Invalid --positions-grid. Provide at least one integer.")
     else:
@@ -157,7 +182,11 @@ def main() -> None:
     bench.index = pd.to_datetime(bench.index)
     bench.sort_index(inplace=True)
 
-    close_col = "Close" if "Close" in bench.columns else ("close" if "close" in bench.columns else None)
+    close_col = (
+        "Close"
+        if "Close" in bench.columns
+        else ("close" if "close" in bench.columns else None)
+    )
     if close_col is None:
         raise RuntimeError("Benchmark cache for ^N225 has no Close column")
 
@@ -169,7 +198,9 @@ def main() -> None:
     supported = {"none", "n225_sma200"}
     unknown = [x for x in regimes if x not in supported]
     if unknown:
-        raise ValueError(f"Unknown regime(s): {unknown}. Supported: {sorted(supported)}")
+        raise ValueError(
+            f"Unknown regime(s): {unknown}. Supported: {sorted(supported)}"
+        )
     trading_days = pd.DatetimeIndex(bench.index)
     end_date = pd.Timestamp(bench.index.max())
     start_date = end_date - pd.DateOffset(years=lookback_years)
@@ -191,15 +222,42 @@ def main() -> None:
     # - (1@65) with combos of (2)(3)
     scenarios: list[Scenario] = []
     scenarios.append(Scenario("S0_baseline", None, None, None))
-    scenarios.append(Scenario("S2_trailingHighRSI", None, float(args.trailing_mult_high), None))
-    scenarios.append(Scenario("S3_suppressCbreakoutHighRSI", None, None, float(args.high_rsi_threshold)))
-    scenarios.append(Scenario("S2S3_trailing+suppressC", None, float(args.trailing_mult_high), float(args.high_rsi_threshold)))
+    scenarios.append(
+        Scenario("S2_trailingHighRSI", None, float(args.trailing_mult_high), None)
+    )
+    scenarios.append(
+        Scenario(
+            "S3_suppressCbreakoutHighRSI", None, None, float(args.high_rsi_threshold)
+        )
+    )
+    scenarios.append(
+        Scenario(
+            "S2S3_trailing+suppressC",
+            None,
+            float(args.trailing_mult_high),
+            float(args.high_rsi_threshold),
+        )
+    )
 
     for thr in [70.0, 65.0]:
         tlabel = f"{int(thr)}"
         scenarios.append(Scenario(f"S1_rsiMax{tlabel}", thr, None, None))
-        scenarios.append(Scenario(f"S1S2_rsiMax{tlabel}+trailing", thr, float(args.trailing_mult_high), None))
-        scenarios.append(Scenario(f"S1S3_rsiMax{tlabel}+suppressC", thr, None, float(args.high_rsi_threshold)))
+        scenarios.append(
+            Scenario(
+                f"S1S2_rsiMax{tlabel}+trailing",
+                thr,
+                float(args.trailing_mult_high),
+                None,
+            )
+        )
+        scenarios.append(
+            Scenario(
+                f"S1S3_rsiMax{tlabel}+suppressC",
+                thr,
+                None,
+                float(args.high_rsi_threshold),
+            )
+        )
         scenarios.append(
             Scenario(
                 f"S1S2S3_rsiMax{tlabel}+trailing+suppressC",
@@ -254,14 +312,32 @@ def main() -> None:
                     equity_all.append(equity_df)
 
                 summary = pd.concat(summaries, ignore_index=True)
-                trades = pd.concat(trades_all, ignore_index=True) if trades_all else pd.DataFrame()
-                equity = pd.concat(equity_all, ignore_index=True) if equity_all else pd.DataFrame()
+                trades = (
+                    pd.concat(trades_all, ignore_index=True)
+                    if trades_all
+                    else pd.DataFrame()
+                )
+                equity = (
+                    pd.concat(equity_all, ignore_index=True)
+                    if equity_all
+                    else pd.DataFrame()
+                )
                 monthly = _monthly_from_equity_and_trades(equity, trades)
 
-                summary.to_csv(out_dir / "backtest_summary.csv", index=False, encoding="utf-8-sig")
-                equity.to_csv(out_dir / "backtest_equity_curve.csv", index=False, encoding="utf-8-sig")
-                trades.to_csv(out_dir / "backtest_trades.csv", index=False, encoding="utf-8-sig")
-                monthly.to_csv(out_dir / "backtest_monthly.csv", index=False, encoding="utf-8-sig")
+                summary.to_csv(
+                    out_dir / "backtest_summary.csv", index=False, encoding="utf-8-sig"
+                )
+                equity.to_csv(
+                    out_dir / "backtest_equity_curve.csv",
+                    index=False,
+                    encoding="utf-8-sig",
+                )
+                trades.to_csv(
+                    out_dir / "backtest_trades.csv", index=False, encoding="utf-8-sig"
+                )
+                monthly.to_csv(
+                    out_dir / "backtest_monthly.csv", index=False, encoding="utf-8-sig"
+                )
 
                 for _, row in summary.iterrows():
                     grid_rows.append(

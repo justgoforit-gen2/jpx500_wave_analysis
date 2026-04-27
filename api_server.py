@@ -16,6 +16,7 @@ naibu-ryuho-app から HTTP で叩かれ、波形分類・推奨銘柄・株価O
     GET /api/prices/{code}?days=60        -- OHLCV履歴
     GET /api/earnings                     -- 決算予定日
 """
+
 from __future__ import annotations
 
 import sys
@@ -78,7 +79,9 @@ def jpx500_list() -> list[dict]:
 
 
 @app.get("/api/wave/bulk", tags=["wave"])
-def wave_bulk(codes: str = Query(..., description="comma-separated codes, e.g. 1332,6857")) -> list[dict]:
+def wave_bulk(
+    codes: str = Query(..., description="comma-separated codes, e.g. 1332,6857"),
+) -> list[dict]:
     code_list = [c.strip() for c in codes.split(",") if c.strip()]
     if not code_list:
         return []
@@ -109,7 +112,9 @@ def abcd_ranking() -> list[dict]:
 def prices(
     code: str,
     days: int = Query(60, ge=1, le=2000),
-    ticker: str | None = Query(None, description="override ticker, defaults to {code}.T"),
+    ticker: str | None = Query(
+        None, description="override ticker, defaults to {code}.T"
+    ),
 ) -> list[dict]:
     t = ticker or f"{code}.T"
     df = load_cached(t)

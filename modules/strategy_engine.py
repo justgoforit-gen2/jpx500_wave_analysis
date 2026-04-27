@@ -3,8 +3,9 @@
 strategy.yaml の定義に基づいて、各銘柄に対して A/B/C/D パターンの判定と
 補正付きスコアリングを行い、推奨ランキングを出力する。
 """
+
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 # テクニカル指標の計算
 # ============================================================================
 
+
 def compute_sma(close: pd.Series, period: int) -> pd.Series:
     return close.rolling(window=period, min_periods=period).mean()
 
@@ -38,8 +40,9 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series,
-                period: int = 14) -> pd.Series:
+def compute_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
@@ -52,14 +55,16 @@ def compute_volume_ratio(volume: pd.Series, ma_period: int = 20) -> pd.Series:
     return volume / vol_ma
 
 
-def compute_turnover(close: pd.Series, volume: pd.Series,
-                     window: int = 20) -> pd.Series:
+def compute_turnover(
+    close: pd.Series, volume: pd.Series, window: int = 20
+) -> pd.Series:
     daily_turnover = close * volume
     return daily_turnover.rolling(window=window, min_periods=window).mean()
 
 
-def compute_all_features(df: pd.DataFrame,
-                         strategy: dict | None = None) -> dict[str, pd.Series]:
+def compute_all_features(
+    df: pd.DataFrame, strategy: dict | None = None
+) -> dict[str, pd.Series]:
     """strategy.yaml の features 設定に基づき全指標を計算して辞書で返す。"""
     cfg = get_features_config(strategy)
     close = df["Close"].astype(float)
@@ -67,8 +72,12 @@ def compute_all_features(df: pd.DataFrame,
     low = df["Low"].astype(float)
     volume = df["Volume"].astype(float)
 
-    features: dict[str, pd.Series] = {"close": close, "high": high,
-                                       "low": low, "volume": volume}
+    features: dict[str, pd.Series] = {
+        "close": close,
+        "high": high,
+        "low": low,
+        "volume": volume,
+    }
 
     # SMA
     for p in cfg.get("moving_averages", [20, 50, 100, 200]):
@@ -101,9 +110,10 @@ def compute_all_features(df: pd.DataFrame,
 # ローソク足パターン判定
 # ============================================================================
 
-def is_bullish_reversal_candle(open_: float, high: float, low: float,
-                               close: float,
-                               strategy: dict | None = None) -> bool:
+
+def is_bullish_reversal_candle(
+    open_: float, high: float, low: float, close: float, strategy: dict | None = None
+) -> bool:
     """strategy.yaml の candle_patterns.bullish_reversal_candle に基づき判定。"""
     cp = get_candle_patterns(strategy).get("bullish_reversal_candle", {})
     rules = cp.get("rules", {})
@@ -137,6 +147,7 @@ def is_bullish_reversal_candle(open_: float, high: float, low: float,
 # ============================================================================
 # カップウィズハンドル 検出ヘルパー
 # ============================================================================
+
 
 def _detect_cup_with_handle(
     close: pd.Series,
@@ -172,8 +183,8 @@ def _detect_cup_with_handle(
 
     # ハンドル長を総当たり（短い方から）
     for h_len in range(handle_len_min, handle_len_max + 1):
-        h_start = n - h_len - 1   # ハンドル開始インデックス
-        h_end = n - 1              # ハンドル終了（今日の前日まで）
+        h_start = n - h_len - 1  # ハンドル開始インデックス
+        h_end = n - 1  # ハンドル終了（今日の前日まで）
         if h_start < cup_len_min:
             break
 
@@ -189,7 +200,10 @@ def _detect_cup_with_handle(
             continue
 
         # ハンドル深さ
-        if handle_high <= 0 or (handle_high - handle_low) / handle_high > handle_depth_max:
+        if (
+            handle_high <= 0
+            or (handle_high - handle_low) / handle_high > handle_depth_max
+        ):
             continue
 
         # カップ長を総当たり
@@ -232,6 +246,7 @@ def _detect_cup_with_handle(
 # EPS データ取得
 # ============================================================================
 
+
 def fetch_eps_data(ticker_str: str) -> dict:
     """yfinance から四半期・年次 EPS を取得し、CAN-SLIM 判定用の指標を返す。
 
@@ -273,7 +288,7 @@ def fetch_eps_data(ticker_str: str) -> dict:
                     eps_row = a_stmt.loc[idx].dropna().sort_index(ascending=False)
                     break
             if eps_row is not None and len(eps_row) >= 4:
-                annual_growth = []
+                annual_growth: list[float | None] = []
                 for i in range(min(3, len(eps_row) - 1)):
                     cur = float(eps_row.iloc[i])
                     prev = float(eps_row.iloc[i + 1])
@@ -294,8 +309,8 @@ def fetch_eps_data(ticker_str: str) -> dict:
 # パターン判定 (A/B/C/D)
 # ============================================================================
 
-def check_pattern_A(features: dict[str, pd.Series],
-                    pattern_cfg: dict) -> bool:
+
+def check_pattern_A(features: dict[str, pd.Series], pattern_cfg: dict) -> bool:
     """A_trend: トレンド継続"""
     close = features["close"]
     if len(close) < 200:
@@ -331,8 +346,7 @@ def check_pattern_A(features: dict[str, pd.Series],
     return True
 
 
-def check_pattern_B(features: dict[str, pd.Series],
-                    pattern_cfg: dict) -> bool:
+def check_pattern_B(features: dict[str, pd.Series], pattern_cfg: dict) -> bool:
     """B_pullback: 押し目"""
     close = features["close"]
     high = features["high"]
@@ -385,10 +399,8 @@ def check_pattern_B(features: dict[str, pd.Series],
     return True
 
 
-def check_pattern_C(features: dict[str, pd.Series],
-                    pattern_cfg: dict) -> bool:
+def check_pattern_C(features: dict[str, pd.Series], pattern_cfg: dict) -> bool:
     """C_breakout: ブレイクアウト"""
-    close = features["close"]
     high = features["high"]
     volume_ratio = features.get("volume_ratio")
     atr_pct = features.get("atr_pct")
@@ -403,7 +415,7 @@ def check_pattern_C(features: dict[str, pd.Series],
             breakout_n = cond["breakout_high"]
     if len(high) < breakout_n + 1:
         return False
-    past_high = float(high.iloc[-(breakout_n + 1):-1].max())
+    past_high = float(high.iloc[-(breakout_n + 1) : -1].max())
     latest_high = float(high.iloc[-1])
     if latest_high <= past_high:
         return False
@@ -428,16 +440,18 @@ def check_pattern_C(features: dict[str, pd.Series],
     current_atr_pct = float(atr_pct.iloc[-1])
     if pd.isna(current_atr_pct):
         return False
-    pct_rank = float((recent_atr_pct < current_atr_pct).sum()) / len(recent_atr_pct) * 100
+    pct_rank = (
+        float((recent_atr_pct < current_atr_pct).sum()) / len(recent_atr_pct) * 100
+    )
     if pct_rank > rank_threshold:
         return False
 
     return True
 
 
-def check_pattern_D(features: dict[str, pd.Series],
-                    pattern_cfg: dict,
-                    strategy: dict | None = None) -> bool:
+def check_pattern_D(
+    features: dict[str, pd.Series], pattern_cfg: dict, strategy: dict | None = None
+) -> bool:
     """D_reversal: リバーサル"""
     close = features["close"]
     sma_200 = features.get("sma_200")
@@ -545,8 +559,7 @@ def check_pattern_E(
     return _detect_cup_with_handle(close, volume_ratio, cup_handle_cfg)
 
 
-def check_pattern_F(features: dict[str, pd.Series],
-                    pattern_cfg: dict) -> bool:
+def check_pattern_F(features: dict[str, pd.Series], pattern_cfg: dict) -> bool:
     """F_turnaround: ターンアラウンド（底打ち転換）
 
     長期下落トレンド（close < SMA200）にあった銘柄が、
@@ -619,7 +632,9 @@ def check_pattern_F(features: dict[str, pd.Series],
     return True
 
 
-_PATTERN_CHECKERS = {
+# 各 checker は引数数が異なる（A/B/C: 2引数、D/F: 3引数 strategy付き、E: 3引数 eps_data付き）。
+# detect_patterns 側で pat_name に応じて呼び分けるため、ここでは Callable[..., bool] で受ける。
+_PATTERN_CHECKERS: dict[str, Callable[..., bool]] = {
     "A_trend": check_pattern_A,
     "B_pullback": check_pattern_B,
     "C_breakout": check_pattern_C,
@@ -660,6 +675,7 @@ def detect_patterns(
 # スコアリング
 # ============================================================================
 
+
 def _calc_multiplier_piecewise(value: float, points: list[dict]) -> float:
     """piecewise型の補正乗数を計算する。"""
     for p in points:
@@ -677,8 +693,9 @@ def _calc_multiplier_piecewise(value: float, points: list[dict]) -> float:
     return 1.0
 
 
-def _calc_multiplier_linear(value: float, params: dict,
-                            clip: list[float] | None = None) -> float:
+def _calc_multiplier_linear(
+    value: float, params: dict, clip: list[float] | None = None
+) -> float:
     """linear型の補正乗数を計算する。"""
     x0 = params["x0"]
     x1 = params["x1"]
@@ -693,11 +710,13 @@ def _calc_multiplier_linear(value: float, params: dict,
     return m
 
 
-def compute_score(pattern: str,
-                  features: dict[str, pd.Series],
-                  turnover_rank_pct: float,
-                  is_etf: bool = False,
-                  strategy: dict | None = None) -> float:
+def compute_score(
+    pattern: str,
+    features: dict[str, pd.Series],
+    turnover_rank_pct: float,
+    is_etf: bool = False,
+    strategy: dict | None = None,
+) -> float:
     """パターンに対するスコアを計算する。
 
     Args:
@@ -730,8 +749,12 @@ def compute_score(pattern: str,
     # 補正乗数の定義を取得
     multipliers_common = scoring_cfg.get("multipliers", {}).get("common", {})
     if is_etf:
-        etf_mult = scoring_cfg.get("instrument_overrides", {}).get(
-            "ETF", {}).get("multipliers", {}).get("common", {})
+        etf_mult = (
+            scoring_cfg.get("instrument_overrides", {})
+            .get("ETF", {})
+            .get("multipliers", {})
+            .get("common", {})
+        )
         # ETF用があればそちらを優先
         merged_mult = {**multipliers_common, **etf_mult}
     else:
@@ -749,10 +772,18 @@ def compute_score(pattern: str,
             value = turnover_rank_pct
         elif mult_name == "atr_percent":
             atr_pct = features.get("atr_pct")
-            value = float(atr_pct.iloc[-1]) if atr_pct is not None and not pd.isna(atr_pct.iloc[-1]) else 0.03
+            value = (
+                float(atr_pct.iloc[-1])
+                if atr_pct is not None and not pd.isna(atr_pct.iloc[-1])
+                else 0.03
+            )
         elif mult_name == "volume_ratio":
             vr = features.get("volume_ratio")
-            value = float(vr.iloc[-1]) if vr is not None and not pd.isna(vr.iloc[-1]) else 1.0
+            value = (
+                float(vr.iloc[-1])
+                if vr is not None and not pd.isna(vr.iloc[-1])
+                else 1.0
+            )
         else:
             continue
 
@@ -760,7 +791,8 @@ def compute_score(pattern: str,
             m = _calc_multiplier_piecewise(value, mult_cfg.get("points", []))
         elif mult_type == "linear":
             m = _calc_multiplier_linear(
-                value, mult_cfg.get("params", {}), mult_cfg.get("clip"))
+                value, mult_cfg.get("params", {}), mult_cfg.get("clip")
+            )
         else:
             m = 1.0
 
@@ -773,11 +805,15 @@ def compute_score(pattern: str,
 # ランキング生成
 # ============================================================================
 
-def evaluate_single(ticker: str, df: pd.DataFrame,
-                    turnover_rank_pct: float,
-                    is_etf: bool = False,
-                    strategy: dict | None = None,
-                    eps_data: dict | None = None) -> dict[str, Any] | None:
+
+def evaluate_single(
+    ticker: str,
+    df: pd.DataFrame,
+    turnover_rank_pct: float,
+    is_etf: bool = False,
+    strategy: dict | None = None,
+    eps_data: dict | None = None,
+) -> dict[str, Any] | None:
     """1銘柄に対してパターン判定 + スコアリングを実行する。
 
     Returns:
@@ -804,26 +840,32 @@ def evaluate_single(ticker: str, df: pd.DataFrame,
 
     scores = {}
     for pat in matched:
-        scores[pat] = compute_score(pat, features, turnover_rank_pct,
-                                    is_etf, s)
+        scores[pat] = compute_score(pat, features, turnover_rank_pct, is_etf, s)
 
-    best_pattern = max(scores, key=scores.get)
+    best_pattern = max(scores, key=lambda k: scores[k])
     best_score = scores[best_pattern]
 
     # サマリー指標
     close_val = float(features["close"].iloc[-1])
     summary = {
         "close": close_val,
-        "rsi": round(float(features["rsi"].iloc[-1]), 1) if not pd.isna(features["rsi"].iloc[-1]) else None,
-        "atr_pct": round(float(features["atr_pct"].iloc[-1]) * 100, 2) if not pd.isna(features["atr_pct"].iloc[-1]) else None,
-        "volume_ratio": round(float(features["volume_ratio"].iloc[-1]), 2) if not pd.isna(features["volume_ratio"].iloc[-1]) else None,
+        "rsi": round(float(features["rsi"].iloc[-1]), 1)
+        if not pd.isna(features["rsi"].iloc[-1])
+        else None,
+        "atr_pct": round(float(features["atr_pct"].iloc[-1]) * 100, 2)
+        if not pd.isna(features["atr_pct"].iloc[-1])
+        else None,
+        "volume_ratio": round(float(features["volume_ratio"].iloc[-1]), 2)
+        if not pd.isna(features["volume_ratio"].iloc[-1])
+        else None,
     }
     # SMA状態
     for p in [50, 100, 200]:
         sma_key = f"sma_{p}"
         if sma_key in features and not pd.isna(features[sma_key].iloc[-1]):
             summary[f"vs_sma{p}"] = round(
-                (close_val / float(features[sma_key].iloc[-1]) - 1) * 100, 2)
+                (close_val / float(features[sma_key].iloc[-1]) - 1) * 100, 2
+            )
 
     return {
         "ticker": ticker,
@@ -835,11 +877,13 @@ def evaluate_single(ticker: str, df: pd.DataFrame,
     }
 
 
-def generate_ranking(stock_list: pd.DataFrame,
-                     load_cached_fn,
-                     strategy: dict | None = None,
-                     max_positions: int | None = None,
-                     eps_data_map: dict[str, dict] | None = None) -> pd.DataFrame:
+def generate_ranking(
+    stock_list: pd.DataFrame,
+    load_cached_fn,
+    strategy: dict | None = None,
+    max_positions: int | None = None,
+    eps_data_map: dict[str, dict] | None = None,
+) -> pd.DataFrame:
     """全銘柄を評価し、スコア順にランキングを生成する。
 
     Args:
@@ -871,11 +915,11 @@ def generate_ranking(stock_list: pd.DataFrame,
 
     # 順位パーセンタイル (0=最も多い)
     if turnover_values:
-        sorted_tickers = sorted(turnover_values, key=turnover_values.get,
-                                reverse=True)
+        sorted_tickers = sorted(
+            turnover_values, key=lambda t: turnover_values[t], reverse=True
+        )
         total = len(sorted_tickers)
-        turnover_rank = {t: (i / total) * 100
-                         for i, t in enumerate(sorted_tickers)}
+        turnover_rank = {t: (i / total) * 100 for i, t in enumerate(sorted_tickers)}
     else:
         turnover_rank = {}
 
@@ -893,25 +937,27 @@ def generate_ranking(stock_list: pd.DataFrame,
             continue
 
         summary = eval_result["features_summary"]
-        results.append({
-            "code": row["code"],
-            "name": row["name"],
-            "size_category": row.get("size_category", ""),
-            "sector_33": row.get("sector_33", ""),
-            "ticker": ticker,
-            "matched_patterns": "|".join(eval_result["matched_patterns"]),
-            "best_pattern": eval_result["best_pattern"],
-            "best_score": eval_result["best_score"],
-            "all_scores": str(eval_result["scores"]),
-            "close": summary.get("close"),
-            "rsi": summary.get("rsi"),
-            "atr_pct": summary.get("atr_pct"),
-            "volume_ratio": summary.get("volume_ratio"),
-            "vs_sma50": summary.get("vs_sma50"),
-            "vs_sma100": summary.get("vs_sma100"),
-            "vs_sma200": summary.get("vs_sma200"),
-            "turnover_rank_pct": round(rank_pct, 1),
-        })
+        results.append(
+            {
+                "code": row["code"],
+                "name": row["name"],
+                "size_category": row.get("size_category", ""),
+                "sector_33": row.get("sector_33", ""),
+                "ticker": ticker,
+                "matched_patterns": "|".join(eval_result["matched_patterns"]),
+                "best_pattern": eval_result["best_pattern"],
+                "best_score": eval_result["best_score"],
+                "all_scores": str(eval_result["scores"]),
+                "close": summary.get("close"),
+                "rsi": summary.get("rsi"),
+                "atr_pct": summary.get("atr_pct"),
+                "volume_ratio": summary.get("volume_ratio"),
+                "vs_sma50": summary.get("vs_sma50"),
+                "vs_sma100": summary.get("vs_sma100"),
+                "vs_sma200": summary.get("vs_sma200"),
+                "turnover_rank_pct": round(rank_pct, 1),
+            }
+        )
 
     if not results:
         return pd.DataFrame()
