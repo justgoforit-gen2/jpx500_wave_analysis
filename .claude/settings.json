@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(python *)",
+      "Bash(python -m *)",
+      "Bash(streamlit *)",
+      "Bash(uvicorn *)",
+      "Bash(pytest *)",
+      "Bash(ruff *)",
+      "Bash(mypy *)",
+      "Bash(bandit *)",
+      "Bash(pip-audit *)",
+      "Bash(pip install *)",
+      "Bash(pip show *)",
+      "Bash(pip list *)",
+      "Bash(curl *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(kill *)",
+      "Bash(lsof *)"
+    ],
+    "deny": [
+      "Write(.env)",
+      "Write(.env.*)",
+      "Write(**/.env)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard *)"
+    ],
+    "ask": [
+      "Bash(git push *)"
+    ]
+  }
+}
