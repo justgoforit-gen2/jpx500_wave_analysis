@@ -137,6 +137,8 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+.streamlit/secrets.toml
+.claude/scheduled_tasks.lock
 .venv
 env/
 venv/
