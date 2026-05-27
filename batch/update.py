@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.settings import CACHE_DIR, DAILY_PICKS_CSV, DEFAULT_WINDOW, RESULTS_CSV
 from modules.data_fetcher import fetch_all, load_stock_list
 from modules.earnings_fetcher import fetch_earnings_data
+from modules.per_pbr_history_fetcher import update_per_pbr_history
 from modules.strategy_engine import generate_ranking
 from modules.strategy_loader import load_strategy
 from modules.wave_classifier import classify_all, generate_daily_picks
@@ -77,6 +78,26 @@ def main():
     for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
         logger.info(f"  {t}: {c}銘柄")
 
+    # Step 2.5: PER/PBR履歴更新（週次スナップショット）
+    logger.info("PER/PBR履歴を更新中...")
+    pp_start = time.time()
+
+    def pp_progress(i, tot, ticker):
+        if i % 50 == 0 or i == tot - 1:
+            elapsed = time.time() - pp_start
+            logger.info(
+                f"  PER/PBR履歴... {i + 1}/{tot} ({ticker}) [{elapsed:.0f}秒経過]"
+            )
+
+    try:
+        pp_failures = update_per_pbr_history(progress_callback=pp_progress)
+        elapsed = time.time() - pp_start
+        logger.info(
+            f"PER/PBR履歴更新完了: {elapsed:.0f}秒, 失敗 {len(pp_failures)}銘柄"
+        )
+    except Exception as e:
+        logger.warning(f"PER/PBR履歴更新に失敗: {e}")
+
     # Step 3: 本日の推奨銘柄
     logger.info("本日の推奨銘柄を生成中...")
     picks_df = generate_daily_picks(window=DEFAULT_WINDOW)
@@ -130,6 +151,16 @@ def main():
         logger.info(f"決算発表予定日データ: {len(earnings_df)}件")
     except Exception as e:
         logger.warning(f"決算発表予定日データの取得に失敗: {e}")
+
+    # Step 4.5: JPX投資部門別取引データ（海外投資家フロー）
+    logger.info("JPX投資部門別データを取得中...")
+    try:
+        from modules.jpx_investor_flow_fetcher import fetch_all_investor_flow
+
+        flow_df = fetch_all_investor_flow(force=False)
+        logger.info(f"投資部門別フロー: {len(flow_df)}件")
+    except Exception as e:
+        logger.warning(f"JPX投資部門別データ取得に失敗: {e}")
 
     logger.info("バッチ更新完了")
 

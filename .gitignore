@@ -227,3 +227,14 @@ test_screenshots/
 test_debug.py
 test_playwright.py
 nul
+
+# JPX investor type raw xls cache (regenerable, ~17MB)
+data/jpx_investor_type/
+
+# Generated parquet snapshots (regenerable from batch)
+data/foreign_flow.parquet
+data/per_pbr_history.parquet
+data/per_pbr_failures.csv
+
+# Claude Code local settings
+.claude/settings.local.json

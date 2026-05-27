@@ -583,3 +583,81 @@ def build_index_chart(
     )
 
     return fig
+
+
+def build_flow_index_dual_chart(
+    flow_cumulative: pd.Series,
+    indices: list[dict],
+    window: int = 0,
+    flow_label: str = "海外投資家累積買い越し（億円）",
+) -> go.Figure:
+    """海外投資家の累積フローと株価指数を2軸で重ね表示する。
+
+    Args:
+        flow_cumulative: 累積買い越し額の週次Series (index=date, value=億円)
+        indices: [{"name": str, "data": DataFrame(index=Date, "Close"), "color": str}]
+        window: 表示窓（営業日換算）。0なら全期間
+        flow_label: フロー軸ラベル
+    """
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    flow_display = flow_cumulative.copy()
+    if window and window > 0 and len(flow_display) > window:
+        flow_display = flow_display.iloc[-window:]
+    if not flow_display.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=flow_display.index,
+                y=flow_display.values,
+                mode="lines",
+                name=flow_label,
+                line=dict(color="#1976d2", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(25, 118, 210, 0.15)",
+            ),
+            secondary_y=False,
+        )
+
+    for i, idx_info in enumerate(indices):
+        name = idx_info.get("name", f"index_{i}")
+        data = idx_info.get("data")
+        color = idx_info.get("color", INDEX_COLORS[i % len(INDEX_COLORS)])
+        if data is None or data.empty or "Close" not in data.columns:
+            continue
+        d = data.copy()
+        d.index = pd.to_datetime(d.index)
+        if window and window > 0 and len(d) > window:
+            d = d.iloc[-window:]
+        close = pd.to_numeric(d["Close"], errors="coerce").dropna()
+        if close.empty:
+            continue
+        normalized = close / float(close.iloc[0]) * 100.0
+        fig.add_trace(
+            go.Scatter(
+                x=normalized.index,
+                y=normalized.values,
+                mode="lines",
+                name=name,
+                line=dict(color=color, width=2, dash="solid"),
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        height=520,
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=50, b=10),
+        template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title="海外投資家フロー × 株価指数（左軸: 累積フロー / 右軸: 指数 base=100）",
+    )
+    fig.update_yaxes(title_text=flow_label, secondary_y=False)
+    fig.update_yaxes(title_text="指数 (base=100)", secondary_y=True)
+    fig.update_xaxes(title_text="日付")
+    fig.add_hline(
+        y=0, line_dash="dot", line_color="gray", opacity=0.3, secondary_y=False
+    )
+    fig.add_hline(
+        y=100, line_dash="dot", line_color="gray", opacity=0.3, secondary_y=True
+    )
+    return fig

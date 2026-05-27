@@ -9,6 +9,38 @@ CACHE_DIR = DATA_DIR / "cache"
 STOCK_LIST_CSV = DATA_DIR / "jpx500_list.csv"
 RESULTS_CSV = DATA_DIR / "results.csv"
 DAILY_PICKS_CSV = DATA_DIR / "daily_picks.csv"
+PER_PBR_HISTORY_PARQUET = DATA_DIR / "per_pbr_history.parquet"
+PER_PBR_FAILURES_CSV = DATA_DIR / "per_pbr_failures.csv"
+
+# --- PER/PBR履歴 ---
+PER_PBR_SAMPLING_RULE = "W-FRI"  # 金曜終値で週次サンプリング
+PER_PBR_LOOKBACK_YEARS = 3
+PER_PBR_REPORT_LAG_DAYS = 45  # 発表日不明時の保守的フォールバック
+PER_PBR_MIN_QUARTERS = 4  # TTM算出に必要な最小四半期数
+PER_PBR_FETCH_RETRY = 3
+PER_PBR_FETCH_RETRY_DELAY_SEC = 3
+PER_PBR_DEFAULT_PER_CAP = 100
+PER_PBR_DEFAULT_PBR_CAP = 10
+
+# --- JPX投資部門別取引（海外投資家フロー） ---
+JPX_INVESTOR_TYPE_PAGE_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/investor-type/index.html"
+)
+# 年次バックナンバーアーカイブ。 -01=直近年, -02=前年, ... の連番で過去年が並ぶ。
+JPX_INVESTOR_TYPE_ARCHIVE_URL_TEMPLATE = "https://www.jpx.co.jp/markets/statistics-equities/investor-type/00-00-archives-{n:02d}.html"
+JPX_INVESTOR_TYPE_ARCHIVE_MAX_PAGES = 6  # -01 ~ -06 (約6年遡れる)
+JPX_INVESTOR_TYPE_CACHE_DIR = DATA_DIR / "jpx_investor_type"
+JPX_INVESTOR_FLOW_PARQUET = DATA_DIR / "foreign_flow.parquet"
+JPX_INVESTOR_FLOW_MARKETS = (
+    "TSE Prime",
+    "TSE Standard",
+    "TSE Growth",
+    "Tokyo & Nagoya",
+)
+JPX_INVESTOR_FLOW_LOOKBACK_YEARS = 3
+JPX_INVESTOR_FLOW_FALLBACK_URLS: list[str] = []
+JPX_FETCH_TIMEOUT_SEC = 30
+JPX_FETCH_SLEEP_SEC = 1
 
 # --- 決算発表日 ---
 EARNINGS_CACHE_DIR = DATA_DIR / "earnings"

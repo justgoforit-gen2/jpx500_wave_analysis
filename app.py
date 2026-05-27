@@ -32,23 +32,34 @@ from config.settings import (
     HIGH_VOLATILITY_THRESHOLD,
     SQUEEZE_BANDWIDTH_SHRINK,
     DAILY_PICK_LOOKBACK,
+    PER_PBR_HISTORY_PARQUET,
+    PER_PBR_DEFAULT_PER_CAP,
+    PER_PBR_DEFAULT_PBR_CAP,
 )
 from modules.chart_builder import (
     build_chart,
     build_comparison_chart,
     build_financials_chart,
+    build_flow_index_dual_chart,
     build_index_chart,
 )
 from modules.data_fetcher import (
     load_cached,
     load_stock_list,
     get_nikkei225,
+    get_topix,
     compute_sector_index,
     fetch_financials,
     compute_sector_stats,
     fetch_and_cache,
     GLOBAL_INDICES,
     convert_ohlcv_close_to_jpy_by_month_avg,
+)
+from modules.foreign_flow_analyzer import (
+    compute_cumulative_flow,
+    compute_flow_index_correlation,
+    compute_sector_flow_correlation,
+    load_foreign_flow,
 )
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
 from modules.wave_classifier import compute_indicators, classify
@@ -65,6 +76,19 @@ def _get_price_data_cached(ticker: str) -> pd.DataFrame | None:
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def _get_financials_cached(ticker: str) -> pd.DataFrame | None:
     return fetch_financials(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_per_pbr_history() -> pd.DataFrame | None:
+    """週次PER/PBR履歴 parquet をロード（存在しなければ None）"""
+    if not PER_PBR_HISTORY_PARQUET.exists():
+        return None
+    try:
+        df = pd.read_parquet(PER_PBR_HISTORY_PARQUET)
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    except Exception:
+        return None
 
 
 st.set_page_config(
@@ -483,6 +507,254 @@ def show_list_view():
     else:
         st.caption("表示する指数を選択してください。")
 
+    # --- 海外投資家フロー × 指数 連動分析 ---
+    st.markdown("---")
+    st.markdown("### 海外投資家フロー × 指数 連動分析")
+    st.caption(
+        "週次の投資部門別売買と指数の連動を可視化。相関は因果ではない点に注意。"
+        "データソース: JPX公式「投資部門別取引状況」"
+    )
+
+    flow_df_all = load_foreign_flow(market="TSE Prime")
+    if flow_df_all.empty:
+        st.info(
+            "海外投資家フローデータがまだありません。"
+            "`python batch/update.py` または `python -c 'from modules.jpx_investor_flow_fetcher import fetch_all_investor_flow; fetch_all_investor_flow(force=True)'` を実行してください。"
+        )
+    else:
+        ff_col1, ff_col2, ff_col3 = st.columns([1, 2, 1.5])
+        with ff_col1:
+            ff_market = st.radio(
+                "市場",
+                ["TSE Prime", "TSE Standard", "TSE Growth", "Tokyo & Nagoya"],
+                index=0,
+                key="ff_market",
+            )
+        with ff_col2:
+            # 比較対象: 日経225 + TOPIX + 33業種
+            ff_index_options = ["日経225", "TOPIX (1306.T)"] + sorted(
+                [s for s in results["sector_33"].dropna().unique() if s != ""]
+            )
+            ff_targets = st.multiselect(
+                "比較対象（複数可）",
+                options=ff_index_options,
+                default=["日経225", "TOPIX (1306.T)"],
+                key="ff_targets",
+            )
+        with ff_col3:
+            ff_view = st.radio(
+                "表示形式",
+                [
+                    "累積フロー vs 指数 (2軸)",
+                    "週次フロー × リターン散布図",
+                    "業種別相関バー",
+                ],
+                index=0,
+                key="ff_view",
+            )
+
+        flow_df = load_foreign_flow(market=ff_market)
+        if flow_df.empty:
+            st.caption(f"{ff_market}のフローデータがありません。")
+        else:
+            cumulative = compute_cumulative_flow(flow_df)
+            flow_net = flow_df["net"]
+
+            # === 表示1: 累積フロー × 指数（2軸）===
+            if ff_view.startswith("累積フロー"):
+                indices_for_chart = []
+                _sector_palette = [
+                    "#E91E63",
+                    "#FF9800",
+                    "#9C27B0",
+                    "#4CAF50",
+                    "#795548",
+                    "#00BCD4",
+                ]
+                _sec_idx = 0
+                for name in ff_targets:
+                    if name == "日経225":
+                        d = get_nikkei225()
+                        if d is not None:
+                            indices_for_chart.append(
+                                {"name": name, "data": d, "color": "#1976d2"}
+                            )
+                    elif name == "TOPIX (1306.T)":
+                        d = get_topix()
+                        if d is not None:
+                            indices_for_chart.append(
+                                {"name": name, "data": d, "color": "#E91E63"}
+                            )
+                    else:
+                        d = compute_sector_index(name, results)
+                        if d is not None:
+                            indices_for_chart.append(
+                                {
+                                    "name": f"33業種: {name}",
+                                    "data": d,
+                                    "color": _sector_palette[
+                                        _sec_idx % len(_sector_palette)
+                                    ],
+                                }
+                            )
+                            _sec_idx += 1
+
+                fig_flow = build_flow_index_dual_chart(
+                    flow_cumulative=cumulative,
+                    indices=indices_for_chart,
+                    window=mkt_period_sel,
+                )
+                st.plotly_chart(fig_flow, use_container_width=True)
+
+                latest = flow_df.iloc[-1]
+                _net = latest["net"]
+                _ratio = latest["foreigner_ratio_pct"]
+                st.caption(
+                    f"{ff_market} 直近週 ({flow_df.index[-1].date()}): "
+                    f"net = {_net:+,.0f} 億円 / "
+                    f"委託売買シェア = {_ratio:.1f}%"
+                )
+
+            # === 表示2: 週次散布図 ===
+            elif ff_view.startswith("週次フロー"):
+                from modules.foreign_flow_analyzer import (
+                    compute_index_weekly_close,
+                )
+
+                if not ff_targets:
+                    st.caption("比較対象を1つ以上選択してください。")
+                else:
+                    target_name = ff_targets[0]
+                    if target_name == "日経225":
+                        idx_close = compute_index_weekly_close("^N225")
+                    elif target_name == "TOPIX (1306.T)":
+                        idx_close = compute_index_weekly_close("1306.T")
+                    else:
+                        sec = compute_sector_index(target_name, results)
+                        if sec is None:
+                            idx_close = pd.Series(dtype=float)
+                        else:
+                            idx_close = (
+                                pd.to_numeric(sec["Close"], errors="coerce")
+                                .dropna()
+                                .resample("W-FRI")
+                                .last()
+                                .dropna()
+                            )
+
+                    if idx_close.empty:
+                        st.caption(f"{target_name}の指数データが取得できません。")
+                    else:
+                        # 散布図 + 回帰線
+                        index_ret = idx_close.pct_change().dropna() * 100
+                        joined = pd.concat(
+                            [
+                                flow_net.rename("net_flow_oku"),
+                                index_ret.rename("index_return_pct"),
+                            ],
+                            axis=1,
+                        ).dropna()
+                        joined.index.name = "date"
+                        if len(joined) < 3:
+                            st.caption(
+                                f"データが少なすぎます（{len(joined)}週）。3年バックフィル後に再確認してください。"
+                            )
+                        else:
+                            corr_value = joined["net_flow_oku"].corr(
+                                joined["index_return_pct"]
+                            )
+                            scatter_kwargs = dict(
+                                x="net_flow_oku",
+                                y="index_return_pct",
+                                hover_data={"date": "|%Y-%m-%d"},
+                                title=(
+                                    f"{ff_market} 海外投資家 net (億円) vs "
+                                    f"{target_name} 週次リターン (%) | "
+                                    f"相関={corr_value:.3f}, n={len(joined)}週"
+                                ),
+                                height=500,
+                            )
+                            try:
+                                fig_scatter = px.scatter(
+                                    joined.reset_index(),
+                                    trendline="ols",
+                                    **scatter_kwargs,
+                                )
+                            except Exception:
+                                # statsmodels未導入やStreamlitプロセス内
+                                # キャッシュ不一致のフォールバック
+                                fig_scatter = px.scatter(
+                                    joined.reset_index(),
+                                    **scatter_kwargs,
+                                )
+                            fig_scatter.update_layout(
+                                xaxis_title="海外投資家 net 買い越し（億円）",
+                                yaxis_title=f"{target_name} 週次リターン (%)",
+                            )
+                            st.plotly_chart(fig_scatter, use_container_width=True)
+                            if len(ff_targets) > 1:
+                                st.caption(
+                                    "散布図は複数選択不可。最初の比較対象のみ表示しています。"
+                                )
+
+                            # ラグ別相関表
+                            lag_df = compute_flow_index_correlation(
+                                flow_net=flow_net,
+                                index_close=idx_close,
+                                lags=[-2, -1, 0, 1, 2, 4],
+                            )
+                            with st.expander("ラグ別相関係数"):
+                                st.dataframe(lag_df, use_container_width=True)
+                                st.caption(
+                                    "lag=+N: 指数が N週遅れて反応。lag=-N: 指数が N週先行。"
+                                )
+
+            # === 表示3: 業種別相関バー ===
+            else:
+                ff_lag = st.radio(
+                    "ラグ（週）",
+                    [0, 1, 2, 4],
+                    index=0,
+                    horizontal=True,
+                    key="ff_corr_lag",
+                    help="0=同週、+N=N週遅れて指数が反応",
+                )
+                sector_corr = compute_sector_flow_correlation(
+                    results_df=results,
+                    flow_net=flow_net,
+                    lag=ff_lag,
+                )
+                if sector_corr.empty:
+                    st.caption(
+                        "業種別相関が計算できません。データ蓄積が少ない可能性があります。"
+                    )
+                else:
+                    fig_corr = px.bar(
+                        sector_corr,
+                        x="corr",
+                        y="sector_33",
+                        orientation="h",
+                        color="corr",
+                        color_continuous_scale="RdBu",
+                        range_color=[-1, 1],
+                        title=(
+                            f"{ff_market} 海外投資家フロー vs 業種指数リターン 相関係数 "
+                            f"(lag={ff_lag}週, n={sector_corr['n_weeks'].iloc[0]}週)"
+                        ),
+                        height=750,
+                    )
+                    fig_corr.update_layout(
+                        yaxis=dict(autorange="reversed"),
+                        xaxis_title="相関係数",
+                        yaxis_title="33業種",
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                    st.caption(
+                        "正の相関: 海外投資家の買い越しと業種上昇が連動。"
+                        "負の相関: 売り越しで業種が上昇。"
+                        "相関は因果ではない点に注意。"
+                    )
+
     # --- 33業種サマリー ---
     st.markdown("---")
     st.markdown("### 33業種 PER・PBR・時価総額")
@@ -626,6 +898,390 @@ def show_list_view():
             st.caption(f"表示件数: {len(scatter_df)}")
     else:
         st.caption("PER/PBR列がないため散布図を表示できません。")
+
+    # --- PER × PBR 時系列アニメーション ---
+    st.markdown("---")
+    st.markdown("### PER × PBR 時系列アニメーション")
+    st.caption(
+        "週次（金曜終値）のPER/PBRを時系列で再生。"
+        "業績(EPS/BPS)と株価期待値の変化を観測するためのビューです。"
+    )
+
+    pp_hist = _load_per_pbr_history()
+    if pp_hist is None or len(pp_hist) == 0:
+        st.info(
+            "PER/PBR履歴データがまだありません。"
+            "`python batch/update.py` を実行して per_pbr_history.parquet を生成してください。"
+        )
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            anim_period = st.radio(
+                "期間",
+                ["直近1年", "直近2年", "直近3年"],
+                index=1,
+                horizontal=False,
+                key="pp_anim_period",
+            )
+        with c2:
+            anim_scope = st.radio(
+                "対象",
+                ["絞り込み後", "全銘柄"],
+                index=0,
+                horizontal=False,
+                key="pp_anim_scope",
+            )
+            anim_unit = st.radio(
+                "表示単位",
+                ["個別銘柄", "業種加重平均"],
+                index=0,
+                horizontal=False,
+                key="pp_anim_unit",
+                help=(
+                    "業種加重平均: 各業種を1点として表示。"
+                    "業種PER = Σ(時価総額) / Σ(純利益)、点サイズは業種合計時価総額。"
+                ),
+            )
+            sector_choices = ["（業種で絞らない）"] + sorted(
+                [s for s in pp_hist["sector_33"].dropna().unique() if s != ""]
+            )
+            anim_sector = st.selectbox(
+                "業種",
+                sector_choices,
+                index=0,
+                key="pp_anim_sector",
+                help="単一業種に絞ってアニメ再生します（個別銘柄モード時のみ有効）",
+                disabled=(anim_unit == "業種加重平均"),
+            )
+        with c3:
+            per_cap = st.slider(
+                "PER上限",
+                min_value=10,
+                max_value=200,
+                value=PER_PBR_DEFAULT_PER_CAP,
+                step=5,
+                key="pp_anim_per_cap",
+            )
+            pbr_cap = st.slider(
+                "PBR上限",
+                min_value=1,
+                max_value=30,
+                value=PER_PBR_DEFAULT_PBR_CAP,
+                step=1,
+                key="pp_anim_pbr_cap",
+            )
+        with c4:
+            speed_label = st.select_slider(
+                "再生速度",
+                options=["遅い", "標準", "速い"],
+                value="標準",
+                key="pp_anim_speed",
+            )
+            size_metric = st.radio(
+                "点サイズ",
+                ["時価総額", "ROE", "固定"],
+                index=0,
+                horizontal=True,
+                key="pp_anim_size_metric",
+                help="ROE(%) = PBR / PER × 100。負値（赤字）は最小サイズに丸める。",
+            )
+            use_log_x = st.checkbox("PER軸を対数表示", value=False, key="pp_anim_log_x")
+            include_loss = st.checkbox(
+                "赤字銘柄も含める",
+                value=False,
+                key="pp_anim_include_loss",
+                help="TTM EPSが負（PERが負値）の銘柄を表示するかどうか",
+            )
+
+        years_map = {"直近1年": 1, "直近2年": 2, "直近3年": 3}
+        years = years_map.get(anim_period, 2)
+        speed_map = {"遅い": 1000, "標準": 500, "速い": 250}
+        speed_ms = speed_map.get(speed_label, 500)
+
+        cutoff_date = pd.Timestamp.now().normalize() - pd.Timedelta(days=years * 365)
+        plot_df = pp_hist[pp_hist["date"] >= cutoff_date].copy()
+
+        if anim_scope == "絞り込み後" and filtered is not None and len(filtered) > 0:
+            target_codes = set(filtered["code"].astype(str).tolist())
+            plot_df = plot_df[plot_df["code"].astype(str).isin(target_codes)]
+
+        # 業種絞り込みは個別銘柄モードでのみ適用（加重平均モードは全業種を表示）
+        if anim_unit == "個別銘柄" and anim_sector != "（業種で絞らない）":
+            plot_df = plot_df[plot_df["sector_33"] == anim_sector]
+
+        plot_df["per"] = pd.to_numeric(plot_df["per"], errors="coerce")
+        plot_df["pbr"] = pd.to_numeric(plot_df["pbr"], errors="coerce")
+        plot_df["market_cap"] = pd.to_numeric(
+            plot_df.get("market_cap"), errors="coerce"
+        )
+        plot_df = plot_df.dropna(subset=["per", "pbr"])
+
+        # 加重平均モードは赤字銘柄を除外（合算PER分母が負になるため）
+        if anim_unit == "業種加重平均" or not include_loss:
+            plot_df = plot_df[(plot_df["per"] > 0) & (plot_df["pbr"] > 0)]
+        else:
+            plot_df = plot_df[plot_df["pbr"] > 0]
+
+        # 加重平均モードでは業種×日付で集計してから上限クリップ
+        if anim_unit == "業種加重平均":
+            plot_df = plot_df.dropna(subset=["market_cap"])
+            plot_df = plot_df[plot_df["market_cap"] > 0]
+            if len(plot_df) > 0:
+                plot_df = plot_df.assign(
+                    _earn=plot_df["market_cap"] / plot_df["per"],
+                    _equity=plot_df["market_cap"] / plot_df["pbr"],
+                )
+                agg = (
+                    plot_df.groupby(["date", "sector_33"])
+                    .agg(
+                        mc_sum=("market_cap", "sum"),
+                        earn_sum=("_earn", "sum"),
+                        equity_sum=("_equity", "sum"),
+                        n=("code", "nunique"),
+                    )
+                    .reset_index()
+                )
+                agg["per"] = agg["mc_sum"] / agg["earn_sum"]
+                agg["pbr"] = agg["mc_sum"] / agg["equity_sum"]
+                agg = agg.rename(columns={"sector_33": "name", "mc_sum": "market_cap"})
+                agg["code"] = agg["name"]
+                agg["sector_33"] = agg["name"]
+                agg["size_category"] = "業種加重"
+                agg["close"] = pd.NA
+                plot_df = agg[
+                    [
+                        "code",
+                        "name",
+                        "date",
+                        "per",
+                        "pbr",
+                        "market_cap",
+                        "sector_33",
+                        "size_category",
+                        "close",
+                        "n",
+                    ]
+                ]
+
+        plot_df = plot_df[(plot_df["per"] <= per_cap) & (plot_df["pbr"] <= pbr_cap)]
+
+        if len(plot_df) == 0:
+            st.caption("選択条件に該当するデータがありません。")
+        else:
+            plot_df["date_str"] = plot_df["date"].dt.strftime("%Y-%m-%d")
+            plot_df = plot_df.sort_values(["date_str", "code"])
+
+            # 色分け方針
+            if anim_unit == "業種加重平均":
+                color_col = "sector_33"
+            elif anim_sector != "（業種で絞らない）":
+                color_col = "name" if "name" in plot_df.columns else None
+            else:
+                color_col = "sector_33" if "sector_33" in plot_df.columns else None
+
+            # 点サイズの計算列
+            size_col: str | None = None
+            # market_cap は hover でも使うので常に整形しておく
+            if "market_cap" in plot_df.columns:
+                plot_df["market_cap"] = pd.to_numeric(
+                    plot_df["market_cap"], errors="coerce"
+                )
+                if plot_df["market_cap"].notna().any():
+                    min_mc = plot_df["market_cap"].dropna().min()
+                    plot_df["market_cap"] = (
+                        plot_df["market_cap"].fillna(min_mc).clip(lower=1.0)
+                    )
+
+            # ROE = PBR / PER × 100 を計算
+            plot_df["roe"] = (
+                pd.to_numeric(plot_df["pbr"], errors="coerce")
+                / pd.to_numeric(plot_df["per"], errors="coerce")
+                * 100
+            )
+            # size用に常に roe_size 列を計算（hover_data から確実に参照可能にする）
+            plot_df["roe_size"] = plot_df["roe"].fillna(0.1).clip(lower=0.1)
+
+            if size_metric == "時価総額" and plot_df["market_cap"].notna().any():
+                size_col = "market_cap"
+            elif size_metric == "ROE":
+                size_col = "roe_size"
+
+            # hover_dataはモードによって変える
+            if anim_unit == "業種加重平均":
+                hover_data = {
+                    "n": True,  # 業種内の銘柄数
+                    "per": ":.2f",
+                    "pbr": ":.2f",
+                    "roe": ":.1f",
+                    "market_cap": ":.0f",
+                    "roe_size": False,
+                    "date_str": False,
+                    "code": False,
+                    "sector_33": False,
+                }
+            else:
+                hover_data = {
+                    "code": True,
+                    "size_category": "size_category" in plot_df.columns,
+                    "close": ":.0f",
+                    "per": ":.2f",
+                    "pbr": ":.2f",
+                    "roe": ":.1f",
+                    "market_cap": ":.0f",
+                    "roe_size": False,
+                    "date_str": False,
+                }
+
+            fig_anim = px.scatter(
+                plot_df,
+                x="per",
+                y="pbr",
+                animation_frame="date_str",
+                animation_group="code",
+                color=color_col,
+                size=size_col,
+                size_max=55 if anim_unit == "業種加重平均" else 45,
+                hover_name="name" if "name" in plot_df.columns else None,
+                hover_data=hover_data,
+                range_x=[
+                    0 if not use_log_x else max(plot_df["per"].min(), 0.1),
+                    per_cap,
+                ],
+                range_y=[0, pbr_cap],
+                log_x=use_log_x,
+                height=620,
+            )
+            if anim_unit == "業種加重平均":
+                legend_title = "33業種"
+            elif anim_sector != "（業種で絞らない）":
+                legend_title = "銘柄"
+            else:
+                legend_title = "33業種" if color_col else None
+            fig_anim.update_layout(
+                xaxis_title="PER",
+                yaxis_title="PBR",
+                legend_title_text=legend_title,
+            )
+            # スライダー/再生速度調整
+            try:
+                if fig_anim.layout.updatemenus:
+                    fig_anim.layout.updatemenus[0].buttons[0].args[1]["frame"][
+                        "duration"
+                    ] = speed_ms
+                    fig_anim.layout.updatemenus[0].buttons[0].args[1]["transition"][
+                        "duration"
+                    ] = speed_ms // 2
+            except Exception:
+                pass
+
+            st.plotly_chart(fig_anim, use_container_width=True)
+            if anim_unit == "業種加重平均":
+                st.caption(
+                    f"単位: 業種加重平均 / 対象: {plot_df['code'].nunique()}業種 × "
+                    f"{plot_df['date_str'].nunique()}週 "
+                    f"(期間: {plot_df['date'].min().date()} ～ {plot_df['date'].max().date()})"
+                )
+            else:
+                sector_label = (
+                    ""
+                    if anim_sector == "（業種で絞らない）"
+                    else f"業種={anim_sector} / "
+                )
+                st.caption(
+                    f"{sector_label}対象: {plot_df['code'].nunique()}銘柄 × "
+                    f"{plot_df['date_str'].nunique()}週 "
+                    f"(期間: {plot_df['date'].min().date()} ～ {plot_df['date'].max().date()})"
+                )
+
+            # 業種別中央値の時系列（個別銘柄モード時のみ。加重平均モードでは散布図と重複するため非表示）
+            if anim_unit == "個別銘柄":
+                with st.expander("業種別 PER/PBR 中央値の時系列推移"):
+                    if "sector_33" in plot_df.columns:
+                        agg_method = st.radio(
+                            "集計方法",
+                            ["中央値", "時価総額加重平均"],
+                            index=0,
+                            horizontal=True,
+                            key="pp_anim_agg_method",
+                            help=(
+                                "加重平均: 業種PER = Σ(時価総額) / Σ(純利益)、"
+                                "業種PBR = Σ(時価総額) / Σ(純資産)。"
+                                "規模の大きい銘柄ほど影響が大きい。"
+                            ),
+                        )
+
+                        if agg_method == "中央値":
+                            agg_df = (
+                                plot_df.groupby(["date", "sector_33"])[["per", "pbr"]]
+                                .median()
+                                .reset_index()
+                            )
+                            per_title = "業種別 PER中央値"
+                            pbr_title = "業種別 PBR中央値"
+                        else:
+                            # 時価総額加重: market_cap, eps_ttm, bps を業種・日付で合計
+                            # PER_w = Σ(market_cap) / Σ(market_cap / per) = Σ(close*shares) / Σ(eps_ttm*shares)
+                            # PBR_w = Σ(market_cap) / Σ(market_cap / pbr) = Σ(close*shares) / Σ(bps*shares)
+                            w_df = plot_df.copy()
+                            w_df["per"] = pd.to_numeric(w_df["per"], errors="coerce")
+                            w_df["pbr"] = pd.to_numeric(w_df["pbr"], errors="coerce")
+                            w_df["market_cap"] = pd.to_numeric(
+                                w_df["market_cap"], errors="coerce"
+                            )
+                            # 加重PERは赤字銘柄を除外（純利益合計が負だと意味を失う）
+                            per_valid = w_df[
+                                (w_df["per"] > 0) & (w_df["market_cap"] > 0)
+                            ].copy()
+                            per_valid["earnings"] = (
+                                per_valid["market_cap"] / per_valid["per"]
+                            )
+                            per_agg = per_valid.groupby(["date", "sector_33"]).agg(
+                                mc_sum=("market_cap", "sum"),
+                                e_sum=("earnings", "sum"),
+                            )
+                            per_agg["per"] = per_agg["mc_sum"] / per_agg["e_sum"]
+
+                            pbr_valid = w_df[
+                                (w_df["pbr"] > 0) & (w_df["market_cap"] > 0)
+                            ].copy()
+                            pbr_valid["equity"] = (
+                                pbr_valid["market_cap"] / pbr_valid["pbr"]
+                            )
+                            pbr_agg = pbr_valid.groupby(["date", "sector_33"]).agg(
+                                mc_sum=("market_cap", "sum"),
+                                b_sum=("equity", "sum"),
+                            )
+                            pbr_agg["pbr"] = pbr_agg["mc_sum"] / pbr_agg["b_sum"]
+
+                            agg_df = (
+                                per_agg[["per"]]
+                                .join(pbr_agg[["pbr"]], how="outer")
+                                .reset_index()
+                            )
+                            per_title = "業種別 PER（時価総額加重）"
+                            pbr_title = "業種別 PBR（時価総額加重）"
+
+                        col_per, col_pbr = st.columns(2)
+                        with col_per:
+                            fig_per = px.line(
+                                agg_df,
+                                x="date",
+                                y="per",
+                                color="sector_33",
+                                title=per_title,
+                                height=400,
+                            )
+                            st.plotly_chart(fig_per, use_container_width=True)
+                        with col_pbr:
+                            fig_pbr = px.line(
+                                agg_df,
+                                x="date",
+                                y="pbr",
+                                color="sector_33",
+                                title=pbr_title,
+                                height=400,
+                            )
+                            st.plotly_chart(fig_pbr, use_container_width=True)
 
     # --- 本日の推奨銘柄 ---
     picks = load_daily_picks()

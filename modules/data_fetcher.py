@@ -287,6 +287,15 @@ def get_nikkei225() -> pd.DataFrame | None:
     return fetch_and_cache("^N225")
 
 
+def get_topix() -> pd.DataFrame | None:
+    """TOPIXの代用として 1306.T (TOPIX連動ETF) のデータを取得する。
+
+    yfinance は東証総合指数 ^TPX を返さないため、TOPIX連動上場投信(1306.T)で代用する。
+    base=100 正規化チャート用途では指数本体と十分な相関を持つ。
+    """
+    return fetch_and_cache("1306.T")
+
+
 # 海外主要指数マスタ: {ticker: 表示名}
 GLOBAL_INDICES: dict[str, str] = {
     "^DJI": "ダウ平均",
