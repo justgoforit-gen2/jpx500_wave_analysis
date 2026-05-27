@@ -49,6 +49,7 @@ from modules.data_fetcher import (
     get_nikkei225,
     get_topix,
     compute_sector_index,
+    compute_size_index,
     fetch_financials,
     compute_sector_stats,
     fetch_and_cache,
@@ -59,6 +60,7 @@ from modules.foreign_flow_analyzer import (
     compute_cumulative_flow,
     compute_flow_index_correlation,
     compute_sector_flow_correlation,
+    compute_size_flow_correlation,
     load_foreign_flow,
 )
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
@@ -531,9 +533,16 @@ def show_list_view():
                 key="ff_market",
             )
         with ff_col2:
-            # 比較対象: 日経225 + TOPIX + 33業種
-            ff_index_options = ["日経225", "TOPIX (1308.T)"] + sorted(
-                [s for s in results["sector_33"].dropna().unique() if s != ""]
+            # 比較対象: 日経225 + TOPIX + サイズ別 + 33業種
+            _size_labels_present = [
+                s
+                for s in ("TOPIX Core30", "TOPIX Large70", "TOPIX Mid400")
+                if s in set(results["size_category"].dropna().unique())
+            ]
+            ff_index_options = (
+                ["日経225", "TOPIX (1308.T)"]
+                + _size_labels_present
+                + sorted([s for s in results["sector_33"].dropna().unique() if s != ""])
             )
             ff_targets = st.multiselect(
                 "比較対象（複数可）",
@@ -548,6 +557,7 @@ def show_list_view():
                     "累積フロー vs 指数 (2軸)",
                     "週次フロー × リターン散布図",
                     "業種別相関バー",
+                    "サイズ別相関バー",
                 ],
                 index=0,
                 key="ff_view",
@@ -586,6 +596,11 @@ def show_list_view():
                     "#795548",
                     "#00BCD4",
                 ]
+                _size_color_map = {
+                    "TOPIX Core30": "#2E7D32",
+                    "TOPIX Large70": "#43A047",
+                    "TOPIX Mid400": "#7CB342",
+                }
                 _sec_idx = 0
                 for name in ff_targets:
                     if name == "日経225":
@@ -599,6 +614,16 @@ def show_list_view():
                         if d is not None:
                             indices_for_chart.append(
                                 {"name": name, "data": d, "color": "#E91E63"}
+                            )
+                    elif name in _size_color_map:
+                        d = compute_size_index(name, results)
+                        if d is not None:
+                            indices_for_chart.append(
+                                {
+                                    "name": f"サイズ: {name}",
+                                    "data": d,
+                                    "color": _size_color_map[name],
+                                }
                             )
                     else:
                         d = compute_sector_index(name, results)
@@ -644,6 +669,22 @@ def show_list_view():
                         idx_close = compute_index_weekly_close("^N225")
                     elif target_name == "TOPIX (1308.T)":
                         idx_close = compute_index_weekly_close("1308.T")
+                    elif target_name in (
+                        "TOPIX Core30",
+                        "TOPIX Large70",
+                        "TOPIX Mid400",
+                    ):
+                        size_idx = compute_size_index(target_name, results)
+                        if size_idx is None:
+                            idx_close = pd.Series(dtype=float)
+                        else:
+                            idx_close = (
+                                pd.to_numeric(size_idx["Close"], errors="coerce")
+                                .dropna()
+                                .resample("W-FRI")
+                                .last()
+                                .dropna()
+                            )
                     else:
                         sec = compute_sector_index(target_name, results)
                         if sec is None:
@@ -725,7 +766,7 @@ def show_list_view():
                                 )
 
             # === 表示3: 業種別相関バー ===
-            else:
+            elif ff_view.startswith("業種別"):
                 ff_lag = st.radio(
                     "ラグ（週）",
                     [0, 1, 2, 4],
@@ -768,6 +809,56 @@ def show_list_view():
                         "正の相関: 海外投資家の買い越しと業種上昇が連動。"
                         "負の相関: 売り越しで業種が上昇。"
                         "相関は因果ではない点に注意。"
+                    )
+
+            # === 表示4: サイズ別相関バー (Core30 / Large70 / Mid400) ===
+            else:
+                ff_lag_size = st.radio(
+                    "ラグ（週）",
+                    [0, 1, 2, 4],
+                    index=0,
+                    horizontal=True,
+                    key="ff_corr_lag_size",
+                    help="0=同週、+N=N週遅れて指数が反応",
+                )
+                size_corr = compute_size_flow_correlation(
+                    results_df=results,
+                    flow_net=flow_net,
+                    lag=ff_lag_size,
+                )
+                if size_corr.empty:
+                    st.caption(
+                        "サイズ別相関が計算できません。size_category 列または market_cap が不足している可能性があります。"
+                    )
+                else:
+                    fig_size = px.bar(
+                        size_corr,
+                        x="corr",
+                        y="size_category",
+                        orientation="h",
+                        color="corr",
+                        color_continuous_scale="RdBu",
+                        range_color=[-1, 1],
+                        text="corr",
+                        title=(
+                            f"{ff_market} 海外投資家フロー vs サイズ別指数リターン 相関係数 "
+                            f"(lag={ff_lag_size}週, n={size_corr['n_weeks'].iloc[0]}週)"
+                        ),
+                        height=320,
+                    )
+                    fig_size.update_traces(
+                        texttemplate="%{text:.2f}", textposition="outside"
+                    )
+                    fig_size.update_layout(
+                        yaxis=dict(autorange="reversed"),
+                        xaxis_title="相関係数",
+                        yaxis_title="サイズ区分",
+                    )
+                    st.plotly_chart(fig_size, use_container_width=True)
+                    st.caption(
+                        "TOPIX Core30 = 上位30銘柄 (時価総額加重) / "
+                        "Large70 = 31-100位 / Mid400 = 101-500位。"
+                        "Core30 ↔ Large70 ↔ Mid400 の相関差から海外資金の波及順序が読み取れる。"
                     )
 
     # --- 33業種サマリー ---

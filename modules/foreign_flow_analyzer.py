@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from config.settings import JPX_INVESTOR_FLOW_PARQUET
-from modules.data_fetcher import compute_sector_index, load_cached
+from modules.data_fetcher import compute_sector_index, compute_size_index, load_cached
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,52 @@ def compute_sector_flow_correlation(
 
     df = pd.DataFrame(rows).sort_values("corr", ascending=False).reset_index(drop=True)
     return df
+
+
+def compute_size_flow_correlation(
+    results_df: pd.DataFrame,
+    flow_net: pd.Series,
+    lag: int = 0,
+    size_labels: tuple[str, ...] = (
+        "TOPIX Core30",
+        "TOPIX Large70",
+        "TOPIX Mid400",
+    ),
+) -> pd.DataFrame:
+    """size_category 別(Core30/Large70/Mid400)で加重指数とフローの相関を算出。
+
+    Returns:
+        DataFrame[size_category, corr, n_weeks]、corr降順
+    """
+    if flow_net.empty or "size_category" not in results_df.columns:
+        return pd.DataFrame(columns=["size_category", "corr", "n_weeks"])
+
+    flow_w = flow_net.copy()
+    flow_w.index = pd.to_datetime(flow_w.index)
+    flow_w = flow_w.resample("W-FRI").last().dropna()
+
+    rows = []
+    for size in size_labels:
+        size_index = compute_size_index(size, results_df)
+        if size_index is None or size_index.empty:
+            continue
+        weekly = _to_weekly_close(size_index)
+        if weekly.empty:
+            continue
+        ret = weekly.pct_change().dropna()
+        if lag != 0:
+            ret = ret.shift(-lag)
+        joined = pd.concat([flow_w.rename("flow"), ret.rename("ret")], axis=1).dropna()
+        n = len(joined)
+        if n < 4:
+            continue
+        c = float(joined["flow"].corr(joined["ret"]))
+        if not np.isnan(c):
+            rows.append({"size_category": size, "corr": round(c, 4), "n_weeks": n})
+
+    return (
+        pd.DataFrame(rows).sort_values("corr", ascending=False).reset_index(drop=True)
+    )
 
 
 def compute_index_weekly_close(ticker: str) -> pd.Series:

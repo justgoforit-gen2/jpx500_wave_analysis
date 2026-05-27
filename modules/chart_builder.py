@@ -607,7 +607,9 @@ def build_flow_index_dual_chart(
     flow_display.index = pd.to_datetime(flow_display.index)
     start_date: pd.Timestamp | None = None
     if window and window > 0:
-        end_ref = flow_display.index.max() if not flow_display.empty else pd.Timestamp.today()
+        end_ref = (
+            flow_display.index.max() if not flow_display.empty else pd.Timestamp.today()
+        )
         # 営業日換算: window 営業日 ≈ window * 7/5 暦日
         start_date = end_ref - pd.Timedelta(days=int(window * 7 / 5))
         if not flow_display.empty:

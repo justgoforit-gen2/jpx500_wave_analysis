@@ -468,68 +468,43 @@ def compute_sector_stats(results_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("sector_33").reset_index(drop=True)
 
 
-def compute_sector_index(
-    sector_33: str, results_df: pd.DataFrame
-) -> pd.DataFrame | None:
-    """33業種の加重平均指数を算出する（base=100）
+def _compute_group_index(group_stocks: pd.DataFrame) -> pd.DataFrame | None:
+    """銘柄サブセットの時価総額加重指数を算出（base=100）。
 
-    market_cap列がある場合は時価総額加重、ない場合は等加重で算出する。
-
-    Args:
-        sector_33: 33業種区分名
-        results_df: results.csvを読み込んだDataFrame
-
-    Returns:
-        pd.DataFrame with "Close" column indexed by Date, or None
+    内部ヘルパ。market_cap が無効な場合は等加重にフォールバック。
     """
-    has_market_cap = "market_cap" in results_df.columns
-
-    # 同一セクターの銘柄を抽出
-    sector_stocks = results_df[results_df["sector_33"] == sector_33].copy()
-
-    if has_market_cap:
-        # market_capがある銘柄のみ使用
-        valid = sector_stocks[
-            (sector_stocks["market_cap"].notna()) & (sector_stocks["market_cap"] > 0)
+    if len(group_stocks) == 0:
+        return None
+    has_mc = "market_cap" in group_stocks.columns
+    if has_mc:
+        valid = group_stocks[
+            (group_stocks["market_cap"].notna()) & (group_stocks["market_cap"] > 0)
         ]
         if len(valid) > 0:
-            sector_stocks = valid
+            group_stocks = valid
             use_weight = True
         else:
             use_weight = False
     else:
         use_weight = False
 
-    if len(sector_stocks) == 0:
-        return None
-
-    # 各銘柄の日次終値を取得
     price_data = {}
     weights = {}
-    for _, row in sector_stocks.iterrows():
+    for _, row in group_stocks.iterrows():
         ticker = row["ticker"]
         df = load_cached(ticker)
         if df is not None and len(df) > 0:
             price_data[ticker] = df["Close"]
-            if use_weight:
-                weights[ticker] = float(row["market_cap"])
-            else:
-                weights[ticker] = 1.0  # 等加重
+            weights[ticker] = float(row["market_cap"]) if use_weight else 1.0
 
     if not price_data:
         return None
 
-    # 全銘柄の終値をDataFrameに統合
-    prices_df = pd.DataFrame(price_data)
-    prices_df = prices_df.dropna(how="all")
-
+    prices_df = pd.DataFrame(price_data).dropna(how="all")
     if len(prices_df) < 2:
         return None
 
-    # 日次リターンを計算
     returns_df = prices_df.pct_change()
-
-    # 加重平均リターン
     weight_series = pd.Series(weights)
     weighted_returns = []
     for date_idx in returns_df.index:
@@ -542,8 +517,24 @@ def compute_sector_index(
         weighted_returns.append(float((daily * w_norm).sum()))
 
     weighted_returns_series = pd.Series(weighted_returns, index=returns_df.index)
-
-    # 累積して指数化（base=100）
     index_values = (1 + weighted_returns_series).cumprod() * 100
-
     return pd.DataFrame({"Close": index_values}, index=returns_df.index)
+
+
+def compute_sector_index(
+    sector_33: str, results_df: pd.DataFrame
+) -> pd.DataFrame | None:
+    """33業種の時価総額加重指数を算出（base=100）。"""
+    return _compute_group_index(results_df[results_df["sector_33"] == sector_33].copy())
+
+
+def compute_size_index(
+    size_label: str, results_df: pd.DataFrame
+) -> pd.DataFrame | None:
+    """size_category 別の時価総額加重指数を算出（base=100）。
+
+    size_label: "TOPIX Core30" / "TOPIX Large70" / "TOPIX Mid400" など。
+    """
+    return _compute_group_index(
+        results_df[results_df["size_category"] == size_label].copy()
+    )
