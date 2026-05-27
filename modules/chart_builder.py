@@ -601,9 +601,18 @@ def build_flow_index_dual_chart(
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
+    # window は「営業日数」。weekly フローと daily 指数の単位差を解消するため、
+    # window から start_date を求めて 両系列を同じ日付範囲で揃える。
     flow_display = flow_cumulative.copy()
-    if window and window > 0 and len(flow_display) > window:
-        flow_display = flow_display.iloc[-window:]
+    flow_display.index = pd.to_datetime(flow_display.index)
+    start_date: pd.Timestamp | None = None
+    if window and window > 0:
+        end_ref = flow_display.index.max() if not flow_display.empty else pd.Timestamp.today()
+        # 営業日換算: window 営業日 ≈ window * 7/5 暦日
+        start_date = end_ref - pd.Timedelta(days=int(window * 7 / 5))
+        if not flow_display.empty:
+            flow_display = flow_display[flow_display.index >= start_date]
+
     if not flow_display.empty:
         fig.add_trace(
             go.Scatter(
@@ -626,8 +635,8 @@ def build_flow_index_dual_chart(
             continue
         d = data.copy()
         d.index = pd.to_datetime(d.index)
-        if window and window > 0 and len(d) > window:
-            d = d.iloc[-window:]
+        if start_date is not None:
+            d = d[d.index >= start_date]
         close = pd.to_numeric(d["Close"], errors="coerce").dropna()
         if close.empty:
             continue
