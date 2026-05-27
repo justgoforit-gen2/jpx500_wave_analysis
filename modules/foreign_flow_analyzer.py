@@ -164,7 +164,7 @@ def compute_sector_flow_correlation(
 def compute_index_weekly_close(ticker: str) -> pd.Series:
     """ティッカーから週次終値Seriesを取得（既存parquetキャッシュ経由）。
 
-    例: "^N225" (日経225), "1306.T" (TOPIX連動ETF)
+    例: "^N225" (日経225), "1308.T" (TOPIX連動ETF)
     """
     df = load_cached(ticker)
     return _to_weekly_close(df)

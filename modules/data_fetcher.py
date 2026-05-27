@@ -288,12 +288,13 @@ def get_nikkei225() -> pd.DataFrame | None:
 
 
 def get_topix() -> pd.DataFrame | None:
-    """TOPIXの代用として 1306.T (TOPIX連動ETF) のデータを取得する。
+    """TOPIXの代用として 1308.T (上場TOPIX連動ETF) のデータを取得する。
 
-    yfinance は東証総合指数 ^TPX を返さないため、TOPIX連動上場投信(1306.T)で代用する。
-    base=100 正規化チャート用途では指数本体と十分な相関を持つ。
+    yfinance は東証総合指数 ^TPX を返さないため、TOPIX連動上場投信で代用する。
+    1306.T は 2026-03 に 10:1 分割を実施したが yfinance の split メタデータに
+    反映されておらず Close が不連続になるため、分割実績の無い 1308.T を採用。
     """
-    return fetch_and_cache("1306.T")
+    return fetch_and_cache("1308.T")
 
 
 # 海外主要指数マスタ: {ticker: 表示名}

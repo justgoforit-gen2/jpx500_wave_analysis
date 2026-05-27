@@ -532,13 +532,13 @@ def show_list_view():
             )
         with ff_col2:
             # 比較対象: 日経225 + TOPIX + 33業種
-            ff_index_options = ["日経225", "TOPIX (1306.T)"] + sorted(
+            ff_index_options = ["日経225", "TOPIX (1308.T)"] + sorted(
                 [s for s in results["sector_33"].dropna().unique() if s != ""]
             )
             ff_targets = st.multiselect(
                 "比較対象（複数可）",
                 options=ff_index_options,
-                default=["日経225", "TOPIX (1306.T)"],
+                default=["日経225", "TOPIX (1308.T)"],
                 key="ff_targets",
             )
         with ff_col3:
@@ -579,7 +579,7 @@ def show_list_view():
                             indices_for_chart.append(
                                 {"name": name, "data": d, "color": "#1976d2"}
                             )
-                    elif name == "TOPIX (1306.T)":
+                    elif name == "TOPIX (1308.T)":
                         d = get_topix()
                         if d is not None:
                             indices_for_chart.append(
@@ -627,8 +627,8 @@ def show_list_view():
                     target_name = ff_targets[0]
                     if target_name == "日経225":
                         idx_close = compute_index_weekly_close("^N225")
-                    elif target_name == "TOPIX (1306.T)":
-                        idx_close = compute_index_weekly_close("1306.T")
+                    elif target_name == "TOPIX (1308.T)":
+                        idx_close = compute_index_weekly_close("1308.T")
                     else:
                         sec = compute_sector_index(target_name, results)
                         if sec is None:
