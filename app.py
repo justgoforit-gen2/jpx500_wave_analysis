@@ -75,6 +75,15 @@ def _get_price_data_cached(ticker: str) -> pd.DataFrame | None:
     return fetch_and_cache(ticker)
 
 
+# PER/PBR 散布図・アニメーションで使う固定カラーマップ。
+# Core30 = 赤(大型・最も注目)、Large70 = 橙、Mid400 = 緑(中型) で視覚的にサイズ序列が読めるよう統一。
+SIZE_COLOR_MAP = {
+    "TOPIX Core30": "#D32F2F",
+    "TOPIX Large70": "#F57C00",
+    "TOPIX Mid400": "#388E3C",
+}
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def _get_financials_cached(ticker: str) -> pd.DataFrame | None:
     return fetch_financials(ticker)
@@ -954,13 +963,23 @@ def show_list_view():
     # --- PER×PBR 散布図 ---
     st.markdown("---")
     st.markdown("### PER × PBR 散布図")
-    perpbr_scope = st.radio(
-        "対象",
-        ["絞り込み後", "全銘柄"],
-        index=0,
-        horizontal=True,
-        key="perpbr_scope",
-    )
+    pp_c1, pp_c2 = st.columns(2)
+    with pp_c1:
+        perpbr_scope = st.radio(
+            "対象",
+            ["絞り込み後", "全銘柄"],
+            index=0,
+            horizontal=True,
+            key="perpbr_scope",
+        )
+    with pp_c2:
+        perpbr_color_by = st.radio(
+            "色分け",
+            ["33業種", "サイズ区分 (Core30/Large70/Mid400)"],
+            index=0,
+            horizontal=True,
+            key="perpbr_color_by",
+        )
     base_df = filtered if perpbr_scope == "絞り込み後" else results
     if (
         base_df is not None
@@ -977,12 +996,26 @@ def show_list_view():
         if len(scatter_df) == 0:
             st.caption("PER/PBRのデータがありません（欠損または0以下）。")
         else:
-            color_col = "sector_33" if "sector_33" in scatter_df.columns else None
+            use_size_color = perpbr_color_by.startswith("サイズ")
+            if use_size_color and "size_category" in scatter_df.columns:
+                color_col = "size_category"
+                color_map = SIZE_COLOR_MAP
+                legend_title = "サイズ区分"
+            else:
+                color_col = "sector_33" if "sector_33" in scatter_df.columns else None
+                color_map = None
+                legend_title = "33業種" if color_col else None
             fig_scatter = px.scatter(
                 scatter_df,
                 x="per",
                 y="pbr",
                 color=color_col,
+                color_discrete_map=color_map,
+                category_orders=(
+                    {"size_category": list(SIZE_COLOR_MAP.keys())}
+                    if use_size_color
+                    else None
+                ),
                 hover_name="name" if "name" in scatter_df.columns else None,
                 hover_data={
                     "code": True if "code" in scatter_df.columns else False,
@@ -998,7 +1031,7 @@ def show_list_view():
                 height=520,
                 xaxis_title="PER",
                 yaxis_title="PBR",
-                legend_title_text="33業種" if color_col else None,
+                legend_title_text=legend_title,
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
             st.caption(f"表示件数: {len(scatter_df)}")
@@ -1098,6 +1131,14 @@ def show_list_view():
                 key="pp_anim_include_loss",
                 help="TTM EPSが負（PERが負値）の銘柄を表示するかどうか",
             )
+            anim_color_by = st.radio(
+                "色分け",
+                ["33業種", "サイズ区分"],
+                index=0,
+                horizontal=True,
+                key="pp_anim_color_by",
+                help="個別銘柄モード時のみ有効。サイズ区分=Core30/Large70/Mid400で色分け",
+            )
 
         years_map = {"直近1年": 1, "直近2年": 2, "直近3年": 3}
         years = years_map.get(anim_period, 2)
@@ -1178,8 +1219,15 @@ def show_list_view():
             plot_df = plot_df.sort_values(["date_str", "code"])
 
             # 色分け方針
+            anim_use_size_color = (
+                anim_color_by == "サイズ区分"
+                and anim_unit == "個別銘柄"
+                and "size_category" in plot_df.columns
+            )
             if anim_unit == "業種加重平均":
                 color_col = "sector_33"
+            elif anim_use_size_color:
+                color_col = "size_category"
             elif anim_sector != "（業種で絞らない）":
                 color_col = "name" if "name" in plot_df.columns else None
             else:
@@ -1245,6 +1293,12 @@ def show_list_view():
                 animation_frame="date_str",
                 animation_group="code",
                 color=color_col,
+                color_discrete_map=SIZE_COLOR_MAP if anim_use_size_color else None,
+                category_orders=(
+                    {"size_category": list(SIZE_COLOR_MAP.keys())}
+                    if anim_use_size_color
+                    else None
+                ),
                 size=size_col,
                 size_max=55 if anim_unit == "業種加重平均" else 45,
                 hover_name="name" if "name" in plot_df.columns else None,
@@ -1259,6 +1313,8 @@ def show_list_view():
             )
             if anim_unit == "業種加重平均":
                 legend_title = "33業種"
+            elif anim_use_size_color:
+                legend_title = "サイズ区分"
             elif anim_sector != "（業種で絞らない）":
                 legend_title = "銘柄"
             else:
