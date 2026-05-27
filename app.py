@@ -562,6 +562,21 @@ def show_list_view():
 
             # === 表示1: 累積フロー × 指数（2軸）===
             if ff_view.startswith("累積フロー"):
+                ff_period_labels = {
+                    0: "全期間",
+                    130: "6ヶ月",
+                    260: "1年",
+                    520: "2年",
+                    780: "3年",
+                }
+                ff_period_sel = st.radio(
+                    "表示期間",
+                    list(ff_period_labels.keys()),
+                    index=0,
+                    horizontal=True,
+                    format_func=lambda x: ff_period_labels[x],
+                    key="ff_period",
+                )
                 indices_for_chart = []
                 _sector_palette = [
                     "#E91E63",
@@ -602,7 +617,7 @@ def show_list_view():
                 fig_flow = build_flow_index_dual_chart(
                     flow_cumulative=cumulative,
                     indices=indices_for_chart,
-                    window=mkt_period_sel,
+                    window=ff_period_sel,
                 )
                 st.plotly_chart(fig_flow, use_container_width=True)
 
