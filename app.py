@@ -998,7 +998,8 @@ def show_list_view():
                 "時価総額_億円",
                 "内部留保_億円",
             ]
-            st.dataframe(
+            st.caption("テーブルの行をクリックすると、その銘柄の詳細画面に移動します。")
+            ces_event = st.dataframe(
                 display[table_cols],
                 column_config={
                     "score": st.column_config.ProgressColumn(
@@ -1031,7 +1032,25 @@ def show_list_view():
                 use_container_width=True,
                 hide_index=True,
                 height=400,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="ces_table",
             )
+
+            # 行クリック → 銘柄詳細へ遷移 (既存パターン踏襲)
+            if ces_event and ces_event.selection and ces_event.selection.rows:
+                _sel_idx = ces_event.selection.rows[0]
+                _sel_code = str(view.iloc[_sel_idx]["code"])
+                _sel_match = results[results["code"].astype(str) == _sel_code]
+                if not _sel_match.empty:
+                    _sel = _sel_match.iloc[0]
+                    st.session_state["selected_ticker"] = _sel.get(
+                        "ticker", f"{_sel_code}.T"
+                    )
+                    st.session_state["selected_code"] = _sel_code
+                    st.session_state["selected_name"] = _sel.get("name", "")
+                    st.session_state["view"] = "detail"
+                    st.rerun()
 
             # --- 散布図 (PBR × ROE) ---
             scatter_view = view.dropna(subset=["pbr", "roe"]).copy()
