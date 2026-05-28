@@ -162,6 +162,27 @@ def main():
     except Exception as e:
         logger.warning(f"JPX投資部門別データ取得に失敗: {e}")
 
+    # Step 5: 資本効率改善期待スクリーニング
+    logger.info("資本効率改善期待スクリーニングを実行中...")
+    try:
+        import pandas as pd
+        from modules.capital_efficiency_screener import run_screening
+        from modules.naibu_client import naibu_db_exists
+
+        if not naibu_db_exists():
+            logger.warning("naibu DB が見つからないためスクリーニングをスキップ")
+        else:
+            results_df = pd.read_csv(
+                RESULTS_CSV, encoding="utf-8-sig", dtype={"code": str}
+            )
+            ces_df = run_screening(results_df, use_yf_cache=False)
+            high_score = (ces_df["score"] >= 6).sum()
+            logger.info(
+                f"資本効率スクリーニング: {len(ces_df)}件 / 強い候補(score>=6): {high_score}件"
+            )
+    except Exception as e:
+        logger.warning(f"資本効率スクリーニングに失敗: {e}")
+
     logger.info("バッチ更新完了")
 
 

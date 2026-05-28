@@ -63,6 +63,9 @@ from modules.foreign_flow_analyzer import (
     compute_size_flow_correlation,
     load_foreign_flow,
 )
+from modules.capital_efficiency_screener import (
+    load_screening_result as _load_ces_result,
+)
 from modules.earnings_fetcher import load_earnings_dates, get_earnings_dates_for_code
 from modules.wave_classifier import compute_indicators, classify
 from modules.strategy_engine import generate_ranking
@@ -869,6 +872,240 @@ def show_list_view():
                         "Large70 = 31-100位 / Mid400 = 101-500位。"
                         "Core30 ↔ Large70 ↔ Mid400 の相関差から海外資金の波及順序が読み取れる。"
                     )
+
+    # --- 資本効率改善期待スクリーナー ---
+    st.markdown("---")
+    st.markdown("### 資本効率改善期待スクリーナー")
+    st.caption(
+        "PBR低 × ROE低 × ネットキャッシュ豊富 × 還元余地大 の組合せで "
+        '増配/自社株買い/政策保有株売却の "カタリスト待ち" 銘柄を10点満点スコアで抽出。'
+        "ハードフィルタ: 自己資本比率≥50% & 営業CF>0 & 純利益>0。"
+        "データソース: naibu (内部留保 + 一部財務) + yfinance (B/S・CF・配当)"
+    )
+
+    ces_df = _load_ces_result()
+    if ces_df is None or len(ces_df) == 0:
+        st.info(
+            "スクリーニング結果がまだありません。"
+            '`python -c "import pandas as pd; from modules.capital_efficiency_screener import run_screening; '
+            "run_screening(pd.read_csv('data/results.csv', encoding='utf-8-sig', dtype={'code':str}))\"` "
+            "または `python batch/update.py` でスクリーニングを実行してください。"
+        )
+    else:
+        ces_c1, ces_c2, ces_c3, ces_c4 = st.columns([1, 1, 1.5, 1.5])
+        with ces_c1:
+            ces_min_score = st.slider(
+                "最低スコア",
+                min_value=0,
+                max_value=10,
+                value=6,
+                step=1,
+                key="ces_min_score",
+            )
+        with ces_c2:
+            ces_pbr_max = st.slider(
+                "PBR上限",
+                min_value=0.5,
+                max_value=2.0,
+                value=1.0,
+                step=0.1,
+                key="ces_pbr_max",
+            )
+        with ces_c3:
+            _sectors_avail = sorted(
+                [s for s in ces_df["sector_33"].dropna().unique() if s != ""]
+            )
+            ces_sectors = st.multiselect(
+                "業種フィルタ",
+                options=_sectors_avail,
+                default=_sectors_avail,
+                key="ces_sectors",
+            )
+        with ces_c4:
+            ces_sizes = st.multiselect(
+                "サイズフィルタ",
+                options=["TOPIX Core30", "TOPIX Large70", "TOPIX Mid400"],
+                default=["TOPIX Core30", "TOPIX Large70", "TOPIX Mid400"],
+                key="ces_sizes",
+            )
+
+        # フィルタ適用 (ハードフィルタ落ちは常に除外)
+        view = ces_df[~ces_df["hard_filter_failed"]].copy()
+        view = view[view["score"] >= ces_min_score]
+        view = view[view["pbr"].fillna(99) <= ces_pbr_max]
+        if ces_sectors:
+            view = view[view["sector_33"].isin(ces_sectors)]
+        if ces_sizes:
+            view = view[view["size_category"].isin(ces_sizes)]
+        view = view.sort_values("score", ascending=False).reset_index(drop=True)
+
+        st.caption(
+            f"該当: {len(view)}件 / 全候補(ハードフィルタ通過): "
+            f"{(~ces_df['hard_filter_failed']).sum()}件 / "
+            f"ハードフィルタ落ち: {ces_df['hard_filter_failed'].sum()}件"
+        )
+
+        if len(view) == 0:
+            st.caption("該当銘柄なし。スライダー/フィルタを緩めてください。")
+        else:
+            # --- ランキングテーブル ---
+            display = view.copy()
+            # 兆/億単位への変換 (兆 = 1e12, 億 = 1e8)
+            display["net_cash_億円"] = (display["net_cash"].fillna(0) / 1e8).round(0)
+            display["営業CF_億円"] = (
+                display["operating_cf_final"].fillna(0) / 1e8
+            ).round(0)
+            display["時価総額_億円"] = (display["market_cap"].fillna(0) / 1e8).round(0)
+            display["内部留保_億円"] = (
+                display["retained_earnings"].fillna(0) / 1e8
+            ).round(0)
+            display["自己資本比率_%"] = (display["equity_ratio"].fillna(0) * 100).round(
+                1
+            )
+            display["配当性向_%"] = (display["payout_ratio"].fillna(0) * 100).round(1)
+            display["ROE_%"] = display["roe"].round(2)
+            display["余剰/時価_%"] = (
+                display["net_cash_to_mcap"].fillna(0) * 100
+            ).round(1)
+
+            table_cols = [
+                "code",
+                "name",
+                "sector_33",
+                "size_category",
+                "score",
+                "pbr",
+                "ROE_%",
+                "自己資本比率_%",
+                "余剰/時価_%",
+                "配当性向_%",
+                "net_cash_億円",
+                "営業CF_億円",
+                "時価総額_億円",
+                "内部留保_億円",
+            ]
+            st.dataframe(
+                display[table_cols],
+                column_config={
+                    "score": st.column_config.ProgressColumn(
+                        "score",
+                        min_value=0,
+                        max_value=10,
+                        format="%d",
+                    ),
+                    "pbr": st.column_config.NumberColumn("PBR", format="%.2f"),
+                    "ROE_%": st.column_config.NumberColumn("ROE(%)", format="%.2f"),
+                    "余剰/時価_%": st.column_config.NumberColumn(
+                        "余剰/時価(%)", format="%.1f"
+                    ),
+                    "配当性向_%": st.column_config.NumberColumn(
+                        "配当性向(%)", format="%.1f"
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+            )
+
+            # --- 散布図 (PBR × ROE) ---
+            scatter_view = view.dropna(subset=["pbr", "roe"]).copy()
+            if len(scatter_view) > 0:
+                scatter_view["net_cash_to_mcap_pct"] = (
+                    scatter_view["net_cash_to_mcap"].fillna(0) * 100
+                ).clip(lower=0)
+                # size は 0 だと px.scatter が落ちることがあるので min=1
+                scatter_view["size_for_plot"] = (
+                    scatter_view["net_cash_to_mcap_pct"].clip(lower=1).fillna(1)
+                )
+                fig_ces = px.scatter(
+                    scatter_view,
+                    x="pbr",
+                    y="roe",
+                    size="size_for_plot",
+                    color="score",
+                    color_continuous_scale="RdYlGn",
+                    range_color=[0, 10],
+                    hover_name="name",
+                    hover_data={
+                        "code": True,
+                        "sector_33": True,
+                        "size_category": True,
+                        "score": True,
+                        "net_cash_to_mcap_pct": ":.1f",
+                        "payout_ratio": ":.2f",
+                        "size_for_plot": False,
+                    },
+                    title="PBR × ROE 散布図 (size=余剰/時価%, color=score)",
+                    height=500,
+                )
+                fig_ces.add_vline(
+                    x=0.7, line_dash="dash", line_color="gray", opacity=0.4
+                )
+                fig_ces.add_vline(
+                    x=1.0, line_dash="dash", line_color="gray", opacity=0.4
+                )
+                fig_ces.add_hline(
+                    y=8.0, line_dash="dash", line_color="gray", opacity=0.4
+                )
+                fig_ces.add_hline(
+                    y=3.0, line_dash="dash", line_color="gray", opacity=0.4
+                )
+                fig_ces.update_layout(xaxis_title="PBR (倍)", yaxis_title="ROE (%)")
+                st.plotly_chart(fig_ces, use_container_width=True)
+
+            # --- スコア内訳バー (上位10銘柄) ---
+            top10 = view.head(10).copy()
+            if len(top10) > 0:
+                bar_long = top10.melt(
+                    id_vars=["name", "code"],
+                    value_vars=[
+                        "pbr_score",
+                        "netcash_score",
+                        "roe_score",
+                        "payout_score",
+                    ],
+                    var_name="軸",
+                    value_name="点",
+                )
+                _axis_label = {
+                    "pbr_score": "PBR低",
+                    "netcash_score": "ネットキャッシュ",
+                    "roe_score": "ROE低",
+                    "payout_score": "還元余地",
+                }
+                bar_long["軸"] = bar_long["軸"].map(_axis_label)
+                bar_long["銘柄"] = bar_long["name"] + " (" + bar_long["code"] + ")"
+                fig_bar = px.bar(
+                    bar_long,
+                    x="点",
+                    y="銘柄",
+                    color="軸",
+                    orientation="h",
+                    title="上位10銘柄 スコア内訳",
+                    color_discrete_map={
+                        "PBR低": "#D32F2F",
+                        "ネットキャッシュ": "#1976D2",
+                        "ROE低": "#F57C00",
+                        "還元余地": "#388E3C",
+                    },
+                    category_orders={
+                        "軸": ["PBR低", "ネットキャッシュ", "ROE低", "還元余地"],
+                        "銘柄": (top10["name"] + " (" + top10["code"] + ")").tolist(),
+                    },
+                    height=400,
+                )
+                fig_bar.update_layout(
+                    yaxis=dict(autorange="reversed"),
+                    xaxis=dict(range=[0, 10]),
+                    legend_title_text="スコア軸",
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            st.caption(
+                "ネットキャッシュ = 現金 - 有利子負債(short_term_debt + long_term_debt または yfinance total_debt)。"
+                "ROE = 純利益 / 自己資本 × 100 (B/Sベース)。"
+                "naibu に欠損する財務は yfinance の最新 balance_sheet / cashflow / info で補完。"
+            )
 
     # --- 33業種サマリー ---
     st.markdown("---")

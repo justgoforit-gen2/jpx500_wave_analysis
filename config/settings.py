@@ -42,6 +42,30 @@ JPX_INVESTOR_FLOW_FALLBACK_URLS: list[str] = []
 JPX_FETCH_TIMEOUT_SEC = 30
 JPX_FETCH_SLEEP_SEC = 1
 
+# --- 資本効率改善期待スクリーナー (CES = Capital Efficiency Screener) ---
+NAIBU_DB_PATH = Path(
+    "C:/Users/justg/Documents/python_projects/dify_projects/naibu-ryuho-app/data.db"
+)
+NAIBU_API_BASE_URL = "http://localhost:8000"
+NAIBU_FETCH_TIMEOUT_SEC = 10
+CAPITAL_EFFICIENCY_PARQUET = DATA_DIR / "capital_efficiency_screen.parquet"
+CAPITAL_EFFICIENCY_RAW_PARQUET = DATA_DIR / "capital_efficiency_raw.parquet"
+
+# ハードフィルタ閾値
+CES_MIN_EQUITY_RATIO = 0.50  # 自己資本比率 >= 50%
+# スコア帯閾値 (PBR)
+CES_PBR_TIERS = ((0.7, 3), (1.0, 2), (1.2, 1))
+# スコア帯閾値 (ネットキャッシュ/時価)
+CES_NETCASH_TIERS = ((0.5, 3), (0.3, 2), (0.0, 1))
+# スコア帯閾値 (ROE bin: 3-8%帯がスイートスポット)
+CES_ROE_SWEET_LO = 3.0
+CES_ROE_SWEET_HI = 8.0
+CES_ROE_SECONDARY_LO = 0.0
+CES_ROE_SECONDARY_HI = 10.0
+# スコア帯閾値 (配当性向)
+CES_PAYOUT_TIERS = ((0.20, 2), (0.30, 1))
+CES_DIVIDEND_YIELD_FALLBACK = 2.0  # %, 配当性向欠損時の代替閾値
+
 # --- 決算発表日 ---
 EARNINGS_CACHE_DIR = DATA_DIR / "earnings"
 EARNINGS_COMBINED_CSV = DATA_DIR / "earnings" / "earnings_dates.csv"

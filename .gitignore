@@ -235,6 +235,8 @@ data/jpx_investor_type/
 data/foreign_flow.parquet
 data/per_pbr_history.parquet
 data/per_pbr_failures.csv
+data/capital_efficiency_screen.parquet
+data/capital_efficiency_raw.parquet
 
 # Claude Code local settings
 .claude/settings.local.json
