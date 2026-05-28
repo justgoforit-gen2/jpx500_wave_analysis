@@ -24,6 +24,9 @@ from config.settings import (
     CAPITAL_EFFICIENCY_PARQUET,
     CAPITAL_EFFICIENCY_RAW_PARQUET,
     CES_DIVIDEND_YIELD_FALLBACK,
+    CES_INSIDER_THRESHOLD,
+    CES_INSTITUTION_HIGH,
+    CES_INSTITUTION_MID,
     CES_MIN_EQUITY_RATIO,
     CES_NETCASH_TIERS,
     CES_PAYOUT_TIERS,
@@ -104,6 +107,28 @@ def _payout_tier_score(
         # 配当性向不明な場合: 低利回り = 還元余地あり
         if dividend_yield_pct < CES_DIVIDEND_YIELD_FALLBACK:
             return 1
+    return 0
+
+
+def _shareholder_tier_score(
+    insider_pct: float | None, institution_pct: float | None
+) -> int:
+    """株主構造改革余地スコア (v1.1, 0-2)。
+
+    - インサイダー比率 >= 50% -> 0 (オーナー支配強く外圧効かない)
+    - 機関投資家比率 >= 30% (かつインサイダー<50%) -> 2 (アクティビスト動きやすい)
+    - 機関投資家比率 >= 20% (かつインサイダー<50%) -> 1
+    - その他/データ欠損 -> 0
+    """
+    if insider_pct is not None and pd.notna(insider_pct):
+        if insider_pct >= CES_INSIDER_THRESHOLD:
+            return 0
+    if institution_pct is None or pd.isna(institution_pct):
+        return 0
+    if institution_pct >= CES_INSTITUTION_HIGH:
+        return 2
+    if institution_pct >= CES_INSTITUTION_MID:
+        return 1
     return 0
 
 
@@ -197,6 +222,7 @@ def compute_capital_efficiency_score(row: pd.Series) -> dict[str, object]:
             "netcash_score": 0,
             "roe_score": 0,
             "payout_score": 0,
+            "shareholder_score": 0,
             "score": 0,
             "hard_filter_failed": True,
             "hard_fail_reason": hard_fail_reason,
@@ -208,13 +234,21 @@ def compute_capital_efficiency_score(row: pd.Series) -> dict[str, object]:
     payout_score = _payout_tier_score(
         row.get("payout_ratio"), row.get("dividend_yield")
     )
+    shareholder_score = _shareholder_tier_score(
+        row.get("insider_pct"), row.get("institution_pct")
+    )
 
     return {
         "pbr_score": pbr_score,
         "netcash_score": netcash_score,
         "roe_score": roe_score,
         "payout_score": payout_score,
-        "score": pbr_score + netcash_score + roe_score + payout_score,
+        "shareholder_score": shareholder_score,
+        "score": pbr_score
+        + netcash_score
+        + roe_score
+        + payout_score
+        + shareholder_score,
         "hard_filter_failed": False,
         "hard_fail_reason": None,
     }
@@ -306,6 +340,10 @@ def run_screening(
         "net_cash_to_mcap",
         "payout_ratio",
         "dividend_yield",
+        "insider_pct",
+        "institution_pct",
+        "treasury_pct",
+        "float_pct",
         "operating_cf_final",
         "net_income_final",
         "total_equity_final",
@@ -319,6 +357,7 @@ def run_screening(
         "netcash_score",
         "roe_score",
         "payout_score",
+        "shareholder_score",
         "hard_filter_failed",
         "hard_fail_reason",
     ]

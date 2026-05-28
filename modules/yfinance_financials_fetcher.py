@@ -61,13 +61,15 @@ def _first_value(
 
 
 def fetch_one_yf_financials(ticker: str) -> dict:
-    """単一ティッカーの財務指標を yfinance から取得。
+    """単一ティッカーの財務指標 + 株主構造指標を yfinance から取得。
 
     Returns:
         dict (欠損は None):
-          total_assets, total_equity, total_debt, cash_yf,
-          operating_cf, net_income_yf,
-          dividend_yield, payout_ratio, fiscal_year_yf
+          財務系: total_assets_yf, total_equity_yf, total_debt_yf, cash_yf,
+                  operating_cf_yf, net_income_yf, fiscal_year_yf,
+                  dividend_yield, payout_ratio
+          株主構造系: insider_pct, institution_pct, treasury_pct, float_pct,
+                  shares_outstanding, treasury_shares
     """
     out: dict[str, float | int | None] = {
         "total_assets_yf": None,
@@ -79,6 +81,13 @@ def fetch_one_yf_financials(ticker: str) -> dict:
         "dividend_yield": None,
         "payout_ratio": None,
         "fiscal_year_yf": None,
+        # 株主構造 (v1.1)
+        "insider_pct": None,
+        "institution_pct": None,
+        "treasury_pct": None,
+        "float_pct": None,
+        "shares_outstanding": None,
+        "treasury_shares": None,
     }
     try:
         t = yf.Ticker(ticker)
@@ -104,6 +113,32 @@ def fetch_one_yf_financials(ticker: str) -> dict:
         pr = info.get("payoutRatio")
         if pr is not None:
             out["payout_ratio"] = float(pr)
+
+        # --- 株主構造KPI (v1.1) ---
+        hi = info.get("heldPercentInsiders")
+        if hi is not None:
+            out["insider_pct"] = float(hi) * 100
+        hp = info.get("heldPercentInstitutions")
+        if hp is not None:
+            out["institution_pct"] = float(hp) * 100
+
+        shares_out = info.get("sharesOutstanding")
+        if shares_out is not None and shares_out > 0:
+            out["shares_outstanding"] = float(shares_out)
+
+        # Treasury Shares from balance_sheet (latest column)
+        treasury = _first_value(bs, ("Treasury Shares Number",))
+        if treasury is not None:
+            out["treasury_shares"] = treasury
+            if out["shares_outstanding"]:
+                # Issued shares ≈ outstanding + treasury (held by company itself)
+                issued = float(out["shares_outstanding"]) + treasury
+                out["treasury_pct"] = treasury / issued * 100 if issued > 0 else None
+
+        # Float ratio
+        float_sh = info.get("floatShares")
+        if float_sh is not None and out["shares_outstanding"]:
+            out["float_pct"] = float(float_sh) / out["shares_outstanding"] * 100
     except Exception as e:
         logger.warning(f"yfinance財務取得失敗 {ticker}: {e}")
     return out

@@ -66,6 +66,14 @@ CES_ROE_SECONDARY_HI = 10.0
 CES_PAYOUT_TIERS = ((0.20, 2), (0.30, 1))
 CES_DIVIDEND_YIELD_FALLBACK = 2.0  # %, 配当性向欠損時の代替閾値
 
+# --- v1.1: 株主構造KPI 閾値 ---
+CES_INSIDER_THRESHOLD = 50.0  # %, インサイダー保有>=これ -> 外圧効かないと判定
+CES_INSTITUTION_HIGH = 30.0  # %, 機関投資家>=これ -> アクティビスト動きやすい (2点)
+CES_INSTITUTION_MID = 20.0  # %, 機関投資家>=これ -> 中間 (1点)
+CES_TOTAL_SCORE_MAX = (
+    12  # PBR(3) + ネットキャッシュ(3) + ROE(2) + 還元(2) + 株主構造(2)
+)
+
 # --- 決算発表日 ---
 EARNINGS_CACHE_DIR = DATA_DIR / "earnings"
 EARNINGS_COMBINED_CSV = DATA_DIR / "earnings" / "earnings_dates.csv"

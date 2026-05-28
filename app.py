@@ -897,10 +897,11 @@ def show_list_view():
             ces_min_score = st.slider(
                 "最低スコア",
                 min_value=0,
-                max_value=10,
-                value=6,
+                max_value=12,
+                value=7,
                 step=1,
                 key="ces_min_score",
+                help="12点満点: PBR低3+ネットキャッシュ3+ROE低2+還元余地2+株主構造2",
             )
         with ces_c2:
             ces_pbr_max = st.slider(
@@ -967,6 +968,15 @@ def show_list_view():
             display["余剰/時価_%"] = (
                 display["net_cash_to_mcap"].fillna(0) * 100
             ).round(1)
+            # 株主構造 (v1.1)
+            display["機関投資家_%"] = display.get(
+                "institution_pct", pd.Series([])
+            ).round(1)
+            display["インサイダー_%"] = display.get("insider_pct", pd.Series([])).round(
+                1
+            )
+            display["自社株_%"] = display.get("treasury_pct", pd.Series([])).round(1)
+            display["浮動株_%"] = display.get("float_pct", pd.Series([])).round(1)
 
             table_cols = [
                 "code",
@@ -979,6 +989,10 @@ def show_list_view():
                 "自己資本比率_%",
                 "余剰/時価_%",
                 "配当性向_%",
+                "機関投資家_%",
+                "インサイダー_%",
+                "自社株_%",
+                "浮動株_%",
                 "net_cash_億円",
                 "営業CF_億円",
                 "時価総額_億円",
@@ -990,7 +1004,7 @@ def show_list_view():
                     "score": st.column_config.ProgressColumn(
                         "score",
                         min_value=0,
-                        max_value=10,
+                        max_value=12,
                         format="%d",
                     ),
                     "pbr": st.column_config.NumberColumn("PBR", format="%.2f"),
@@ -1000,6 +1014,18 @@ def show_list_view():
                     ),
                     "配当性向_%": st.column_config.NumberColumn(
                         "配当性向(%)", format="%.1f"
+                    ),
+                    "機関投資家_%": st.column_config.NumberColumn(
+                        "機関投資家(%)", format="%.1f"
+                    ),
+                    "インサイダー_%": st.column_config.NumberColumn(
+                        "インサイダー(%)", format="%.1f"
+                    ),
+                    "自社株_%": st.column_config.NumberColumn(
+                        "自社株(%)", format="%.1f"
+                    ),
+                    "浮動株_%": st.column_config.NumberColumn(
+                        "浮動株(%)", format="%.1f"
                     ),
                 },
                 use_container_width=True,
@@ -1056,6 +1082,9 @@ def show_list_view():
             # --- スコア内訳バー (上位10銘柄) ---
             top10 = view.head(10).copy()
             if len(top10) > 0:
+                # shareholder_score 列が無い古い parquet との後方互換
+                if "shareholder_score" not in top10.columns:
+                    top10["shareholder_score"] = 0
                 bar_long = top10.melt(
                     id_vars=["name", "code"],
                     value_vars=[
@@ -1063,6 +1092,7 @@ def show_list_view():
                         "netcash_score",
                         "roe_score",
                         "payout_score",
+                        "shareholder_score",
                     ],
                     var_name="軸",
                     value_name="点",
@@ -1072,6 +1102,7 @@ def show_list_view():
                     "netcash_score": "ネットキャッシュ",
                     "roe_score": "ROE低",
                     "payout_score": "還元余地",
+                    "shareholder_score": "株主構造",
                 }
                 bar_long["軸"] = bar_long["軸"].map(_axis_label)
                 bar_long["銘柄"] = bar_long["name"] + " (" + bar_long["code"] + ")"
@@ -1081,22 +1112,29 @@ def show_list_view():
                     y="銘柄",
                     color="軸",
                     orientation="h",
-                    title="上位10銘柄 スコア内訳",
+                    title="上位10銘柄 スコア内訳 (12点満点)",
                     color_discrete_map={
                         "PBR低": "#D32F2F",
                         "ネットキャッシュ": "#1976D2",
                         "ROE低": "#F57C00",
                         "還元余地": "#388E3C",
+                        "株主構造": "#9C27B0",
                     },
                     category_orders={
-                        "軸": ["PBR低", "ネットキャッシュ", "ROE低", "還元余地"],
+                        "軸": [
+                            "PBR低",
+                            "ネットキャッシュ",
+                            "ROE低",
+                            "還元余地",
+                            "株主構造",
+                        ],
                         "銘柄": (top10["name"] + " (" + top10["code"] + ")").tolist(),
                     },
                     height=400,
                 )
                 fig_bar.update_layout(
                     yaxis=dict(autorange="reversed"),
-                    xaxis=dict(range=[0, 10]),
+                    xaxis=dict(range=[0, 12]),
                     legend_title_text="スコア軸",
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
@@ -1104,7 +1142,9 @@ def show_list_view():
             st.caption(
                 "ネットキャッシュ = 現金 - 有利子負債(short_term_debt + long_term_debt または yfinance total_debt)。"
                 "ROE = 純利益 / 自己資本 × 100 (B/Sベース)。"
-                "naibu に欠損する財務は yfinance の最新 balance_sheet / cashflow / info で補完。"
+                "株主構造スコア: インサイダー<50% かつ 機関投資家≥30% で 2点 / ≥20% で 1点 / "
+                "インサイダー≥50% でオーナー支配強と判定し 0点。"
+                "naibu に欠損する財務は yfinance の balance_sheet/cashflow/info で補完。"
             )
 
     # --- 33業種サマリー ---
