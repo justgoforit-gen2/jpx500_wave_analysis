@@ -1334,7 +1334,7 @@ def show_list_view():
     with pp_c2:
         perpbr_color_by = st.radio(
             "色分け",
-            ["33業種", "サイズ区分 (Core30/Large70/Mid400)"],
+            ["33業種", "サイズ区分 (Prime + Standard)"],
             index=0,
             horizontal=True,
             key="perpbr_color_by",
@@ -1496,7 +1496,7 @@ def show_list_view():
                 index=0,
                 horizontal=True,
                 key="pp_anim_color_by",
-                help="個別銘柄モード時のみ有効。サイズ区分=Core30/Large70/Mid400で色分け",
+                help="個別銘柄モード時のみ有効。Prime(Core30/Large70/Mid400)+ Standard(Top100/Top400)で色分け",
             )
 
         years_map = {"直近1年": 1, "直近2年": 2, "直近3年": 3}
