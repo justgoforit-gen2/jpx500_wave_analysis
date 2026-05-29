@@ -20,7 +20,6 @@ from config.settings import (
     RSI_OVERSOLD,
     SLOPE_THRESHOLD,
     SQUEEZE_BANDWIDTH_SHRINK,
-    STOCK_LIST_CSV,
     RESULTS_CSV,
     TOUCH_THRESHOLD_PCT,
 )
@@ -173,8 +172,10 @@ def classify(indicators: dict) -> list[str]:
 
 
 def classify_all(window: int = DEFAULT_WINDOW) -> pd.DataFrame:
-    """全銘柄を分類してDataFrameを返す"""
-    stocks = pd.read_csv(STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str})
+    """全銘柄を分類してDataFrameを返す (JPX500 + Standard Top400 を結合した universe)。"""
+    from modules.data_fetcher import load_stock_list
+
+    stocks = load_stock_list()
     results = []
 
     for _, row in stocks.iterrows():
