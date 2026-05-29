@@ -14,6 +14,8 @@ from config.settings import (
     FETCH_BATCH_SIZE,
     FETCH_RETRY_COUNT,
     FETCH_RETRY_DELAY_SEC,
+    PRIME_MARKET_LABEL,
+    STANDARD_LIST_CSV,
     STOCK_LIST_CSV,
 )
 
@@ -147,8 +149,31 @@ def convert_ohlcv_close_to_jpy_by_month_avg(
 
 
 def load_stock_list() -> pd.DataFrame:
-    """銘柄リストCSVを読み込む"""
-    return pd.read_csv(STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str})
+    """銘柄リストCSVを読み込む (JPX500 + TSE Standard Top N を結合)。
+
+    - jpx500_list.csv (Prime ≈ 598 銘柄、market="TSE Prime")
+    - standard_list.csv が存在すれば Standard Top N (≈ 400) を追加
+    旧スキーマ (market 列無し) の場合は "TSE Prime" を補完して後方互換を保つ。
+    """
+    jpx = pd.read_csv(STOCK_LIST_CSV, encoding="utf-8-sig", dtype={"code": str})
+    if "market" not in jpx.columns:
+        jpx["market"] = PRIME_MARKET_LABEL
+    jpx["market"] = jpx["market"].fillna(PRIME_MARKET_LABEL)
+
+    std_path = Path(STANDARD_LIST_CSV)
+    if std_path.exists():
+        try:
+            std = pd.read_csv(std_path, encoding="utf-8-sig", dtype={"code": str})
+            std["code"] = std["code"].astype(str).str.zfill(4)
+            common = [c for c in jpx.columns if c in std.columns]
+            jpx_aligned = jpx[common].copy()
+            std_aligned = std[common].copy()
+            combined = pd.concat([jpx_aligned, std_aligned], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["ticker"], keep="first")
+            return combined
+        except Exception as e:
+            logger.warning(f"standard_list.csv 読込失敗 (JPX500のみで継続): {e}")
+    return jpx
 
 
 def _cache_path(ticker: str) -> Path:

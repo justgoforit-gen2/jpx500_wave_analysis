@@ -36,7 +36,7 @@ from config.settings import (
     CES_ROE_SWEET_HI,
     CES_ROE_SWEET_LO,
 )
-from modules.naibu_client import fetch_jpx500_naibu_data
+from modules.naibu_client import fetch_universe_naibu_data
 from modules.yfinance_financials_fetcher import (
     cache_yf_financials,
     fetch_all_yf_financials,
@@ -277,9 +277,10 @@ def run_screening(
     Returns:
         スクリーニング結果 DataFrame (score降順)
     """
-    # 1) naibu データ取得
-    logger.info("naibu DB から JPX500 財務を取得中...")
-    naibu_df = fetch_jpx500_naibu_data()
+    # 1) naibu データ取得 (universe-agnostic: results_df の code リストで companies 直接JOIN)
+    codes = [str(c).strip().zfill(4) for c in results_df["code"].astype(str).unique()]
+    logger.info(f"naibu DB から {len(codes)}銘柄 の財務を取得中...")
+    naibu_df = fetch_universe_naibu_data(codes)
     if naibu_df.empty:
         logger.warning("naibu データ取得失敗、yfinance のみで継続")
         naibu_df = pd.DataFrame(columns=["code"])
@@ -300,11 +301,15 @@ def run_screening(
     yf_df = yf_df.copy()
     yf_df["code"] = yf_df["ticker"].str.replace(".T", "", regex=False)
 
-    # 3) results.csv (pbr, market_cap, sector_33, size_category) と結合
-    base = results_df[
-        ["code", "name", "sector_33", "size_category", "pbr", "market_cap"]
-    ].copy()
-    base["code"] = base["code"].astype(str)
+    # 3) results.csv (pbr, market_cap, market, sector_33, size_category) と結合
+    base_cols = ["code", "name", "sector_33", "size_category", "pbr", "market_cap"]
+    if "market" in results_df.columns:
+        base_cols.append("market")
+    base = results_df[base_cols].copy()
+    if "market" not in base.columns:
+        base["market"] = "TSE Prime"
+    base["market"] = base["market"].fillna("TSE Prime")
+    base["code"] = base["code"].astype(str).str.zfill(4)
     base["pbr"] = pd.to_numeric(base["pbr"], errors="coerce")
     base["market_cap"] = pd.to_numeric(base["market_cap"], errors="coerce")
     # ETFを除外
@@ -330,6 +335,7 @@ def run_screening(
     final_cols = [
         "code",
         "name",
+        "market",
         "sector_33",
         "size_category",
         "score",

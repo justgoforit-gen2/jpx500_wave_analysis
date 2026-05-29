@@ -74,6 +74,19 @@ CES_TOTAL_SCORE_MAX = (
     12  # PBR(3) + ネットキャッシュ(3) + ROE(2) + 還元(2) + 株主構造(2)
 )
 
+# --- ユニバース拡張 (TSE Standard Top 400) ---
+JPX_DATA_J_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/misc/"
+    "tvdivq0000001vg2-att/data_j.xls"
+)
+JPX_DATA_J_CACHE = CACHE_DIR / "jpx_data_j.xls"
+STANDARD_LIST_CSV = DATA_DIR / "standard_list.csv"
+STANDARD_TOP_N = 400  # スタンダード市場で取り込む上位銘柄数
+STANDARD_TOP100_THRESHOLD = 100  # Top100 (1-100) と Top400 (101-400) の境界
+JPX_UNIVERSE_REFRESH_DAYS = 7  # data_j.xls の再取得間隔
+STANDARD_MARKET_LABEL = "TSE Standard"
+PRIME_MARKET_LABEL = "TSE Prime"
+
 # --- 決算発表日 ---
 EARNINGS_CACHE_DIR = DATA_DIR / "earnings"
 EARNINGS_COMBINED_CSV = DATA_DIR / "earnings" / "earnings_dates.csv"

@@ -79,12 +79,18 @@ def _get_price_data_cached(ticker: str) -> pd.DataFrame | None:
 
 
 # PER/PBR 散布図・アニメーションで使う固定カラーマップ。
-# Core30 = 赤(大型・最も注目)、Large70 = 橙、Mid400 = 緑(中型) で視覚的にサイズ序列が読めるよう統一。
+# Prime: Core30=赤 / Large70=橙 / Mid400=緑 (時価総額が大きい順に暖色)。
+# Standard: Top100=紫 / Top400=青(青系で Prime と差別化、Standard 内も濃淡を持たせる)。
 SIZE_COLOR_MAP = {
     "TOPIX Core30": "#D32F2F",
     "TOPIX Large70": "#F57C00",
     "TOPIX Mid400": "#388E3C",
+    "TSE Standard Top100": "#7B1FA2",
+    "TSE Standard Top400": "#5C6BC0",
 }
+
+# 市場ラベル (UI フィルタ用)
+MARKET_OPTIONS = ["TSE Prime", "TSE Standard"]
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -303,12 +309,28 @@ def show_list_view():
         if st.sidebar.checkbox(wt, value=True, key=f"wt_{wt}"):
             selected_types.append(wt)
 
+    # 市場 (Prime + TSE Standard Top400)
+    st.sidebar.subheader("市場")
+    selected_markets = st.sidebar.multiselect(
+        "市場を選択",
+        options=MARKET_OPTIONS,
+        default=MARKET_OPTIONS,
+        key="market_filter",
+    )
+
     # 規模区分
     st.sidebar.subheader("規模区分")
-    size_options = ["TOPIX Core30", "TOPIX Large70", "TOPIX Mid400", "ETF"]
+    size_options = [
+        "TOPIX Core30",
+        "TOPIX Large70",
+        "TOPIX Mid400",
+        "TSE Standard Top100",
+        "TSE Standard Top400",
+        "ETF",
+    ]
     selected_sizes = []
     for s in size_options:
-        label = s.replace("TOPIX ", "")
+        label = s.replace("TOPIX ", "").replace("TSE ", "")
         if st.sidebar.checkbox(label, value=True, key=f"sz_{s}"):
             selected_sizes.append(s)
 
@@ -354,6 +376,12 @@ def show_list_view():
     # 推奨銘柄フィルタ
     if show_recommended:
         filtered = filtered[filtered.apply(is_recommended, axis=1)]
+
+    # 市場 (旧データは market 列無し -> TSE Prime 扱い)
+    if "market" not in filtered.columns:
+        filtered["market"] = "TSE Prime"
+    filtered["market"] = filtered["market"].fillna("TSE Prime")
+    filtered = filtered[filtered["market"].isin(selected_markets)]
 
     # 規模
     filtered = filtered[filtered["size_category"].isin(selected_sizes)]
@@ -548,7 +576,13 @@ def show_list_view():
             # 比較対象: 日経225 + TOPIX + サイズ別 + 33業種
             _size_labels_present = [
                 s
-                for s in ("TOPIX Core30", "TOPIX Large70", "TOPIX Mid400")
+                for s in (
+                    "TOPIX Core30",
+                    "TOPIX Large70",
+                    "TOPIX Mid400",
+                    "TSE Standard Top100",
+                    "TSE Standard Top400",
+                )
                 if s in set(results["size_category"].dropna().unique())
             ]
             ff_index_options = (
@@ -612,6 +646,8 @@ def show_list_view():
                     "TOPIX Core30": "#2E7D32",
                     "TOPIX Large70": "#43A047",
                     "TOPIX Mid400": "#7CB342",
+                    "TSE Standard Top100": "#7B1FA2",
+                    "TSE Standard Top400": "#5C6BC0",
                 }
                 _sec_idx = 0
                 for name in ff_targets:
@@ -685,6 +721,8 @@ def show_list_view():
                         "TOPIX Core30",
                         "TOPIX Large70",
                         "TOPIX Mid400",
+                        "TSE Standard Top100",
+                        "TSE Standard Top400",
                     ):
                         size_idx = compute_size_index(target_name, results)
                         if size_idx is None:
@@ -823,7 +861,7 @@ def show_list_view():
                         "相関は因果ではない点に注意。"
                     )
 
-            # === 表示4: サイズ別相関バー (Core30 / Large70 / Mid400) ===
+            # === 表示4: サイズ別相関バー (Prime: Core30/Large70/Mid400, Standard: Top100/Top400) ===
             else:
                 ff_lag_size = st.radio(
                     "ラグ（週）",
@@ -833,10 +871,23 @@ def show_list_view():
                     key="ff_corr_lag_size",
                     help="0=同週、+N=N週遅れて指数が反応",
                 )
+                if ff_market == "TSE Standard":
+                    _size_labels = ("TSE Standard Top100", "TSE Standard Top400")
+                elif ff_market == "TSE Prime":
+                    _size_labels = ("TOPIX Core30", "TOPIX Large70", "TOPIX Mid400")
+                else:
+                    _size_labels = (
+                        "TOPIX Core30",
+                        "TOPIX Large70",
+                        "TOPIX Mid400",
+                        "TSE Standard Top100",
+                        "TSE Standard Top400",
+                    )
                 size_corr = compute_size_flow_correlation(
                     results_df=results,
                     flow_net=flow_net,
                     lag=ff_lag_size,
+                    size_labels=_size_labels,
                 )
                 if size_corr.empty:
                     st.caption(
@@ -868,9 +919,9 @@ def show_list_view():
                     )
                     st.plotly_chart(fig_size, use_container_width=True)
                     st.caption(
-                        "TOPIX Core30 = 上位30銘柄 (時価総額加重) / "
-                        "Large70 = 31-100位 / Mid400 = 101-500位。"
-                        "Core30 ↔ Large70 ↔ Mid400 の相関差から海外資金の波及順序が読み取れる。"
+                        "Prime: Core30(上位30) / Large70(31-100位) / Mid400(101-500位)。"
+                        "Standard: Top100(時価総額上位100) / Top400(101-400位)。"
+                        "サイズ別の相関差から海外資金の波及順序が読み取れる。"
                     )
 
     # --- 資本効率改善期待スクリーナー ---
@@ -925,8 +976,20 @@ def show_list_view():
         with ces_c4:
             ces_sizes = st.multiselect(
                 "サイズフィルタ",
-                options=["TOPIX Core30", "TOPIX Large70", "TOPIX Mid400"],
-                default=["TOPIX Core30", "TOPIX Large70", "TOPIX Mid400"],
+                options=[
+                    "TOPIX Core30",
+                    "TOPIX Large70",
+                    "TOPIX Mid400",
+                    "TSE Standard Top100",
+                    "TSE Standard Top400",
+                ],
+                default=[
+                    "TOPIX Core30",
+                    "TOPIX Large70",
+                    "TOPIX Mid400",
+                    "TSE Standard Top100",
+                    "TSE Standard Top400",
+                ],
                 key="ces_sizes",
             )
 

@@ -153,3 +153,94 @@ def fetch_jpx500_naibu_data() -> pd.DataFrame:
     ] + fields
     other = [c for c in base_df.columns if c not in cols_order]
     return base_df[cols_order + other].reset_index(drop=True)
+
+
+def fetch_universe_naibu_data(
+    securities_codes_4digit: list[str] | None = None,
+) -> pd.DataFrame:
+    """JPX500 / TSE Standard どちらでも使える汎用 naibu フェッチャ。
+
+    Args:
+        securities_codes_4digit: 4桁コードリスト。None なら従来通り
+            `jpx500_membership` 経由で JPX500 全銘柄取得 (=fetch_jpx500_naibu_data)。
+            list 指定時は `companies` テーブルに直接 JOIN し、
+            JPX500 に含まれない Standard 銘柄も拾える。
+
+    Returns: fetch_jpx500_naibu_data と同じスキーマ。
+    """
+    if securities_codes_4digit is None:
+        return fetch_jpx500_naibu_data()
+
+    if not naibu_db_exists():
+        logger.warning(f"naibu DB not found at {NAIBU_DB_PATH}")
+        return pd.DataFrame()
+
+    codes5 = sorted(
+        {to_edinet_securities_code(c) for c in securities_codes_4digit if c}
+    )
+    if not codes5:
+        return pd.DataFrame()
+
+    placeholders = ",".join(["?"] * len(codes5))
+    fields = [
+        "total_assets",
+        "total_equity",
+        "cash",
+        "short_term_debt",
+        "long_term_debt",
+        "operating_cf",
+        "net_income",
+    ]
+    # `companies` に直接 JOIN (jpx500_membership に依存しない)
+    # NOTE: placeholders は SQL injection 安全 (内部生成のみ)。 (bandit: nosec B608)
+    base_q = f"""
+        SELECT
+            co.securities_code AS sec5,
+            co.edinet_code,
+            co.name,
+            co.industry_name,
+            re.fiscal_year,
+            re.amount AS retained_earnings,
+            re.is_consolidated
+        FROM companies co
+        LEFT JOIN retained_earnings re
+            ON re.edinet_code = co.edinet_code
+            AND re.fiscal_year_end = (
+                SELECT MAX(fiscal_year_end) FROM retained_earnings
+                WHERE edinet_code = co.edinet_code
+            )
+        WHERE co.securities_code IN ({placeholders})
+    """  # nosec B608  # placeholders are parameter markers, not user input
+    with _connect() as conn:
+        base_df = pd.read_sql_query(base_q, conn, params=codes5)
+
+        for field in fields:
+            sub_q = f"""
+                SELECT
+                    fm.edinet_code,
+                    fm.{field} AS {field},
+                    fm.fiscal_year AS {field}_fy
+                FROM financial_metrics fm
+                WHERE fm.{field} IS NOT NULL
+                  AND fm.fiscal_year_end = (
+                      SELECT MAX(fiscal_year_end) FROM financial_metrics
+                      WHERE edinet_code = fm.edinet_code AND {field} IS NOT NULL
+                  )
+            """  # nosec B608  # field is from internal whitelist `fields`
+            sub_df = pd.read_sql_query(sub_q, conn)
+            base_df = base_df.merge(sub_df, on="edinet_code", how="left")
+
+    base_df["code"] = base_df["sec5"].str[:4]
+    base_df = base_df.drop(columns=["sec5"])
+
+    cols_order = [
+        "code",
+        "edinet_code",
+        "name",
+        "industry_name",
+        "fiscal_year",
+        "retained_earnings",
+        "is_consolidated",
+    ] + fields
+    other = [c for c in base_df.columns if c not in cols_order]
+    return base_df[cols_order + other].reset_index(drop=True)

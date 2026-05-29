@@ -310,6 +310,7 @@ def build_weekly_per_pbr(
     ttm_eps: pd.Series,
     bps: pd.Series,
     shares_latest: float | None = None,
+    market: str = "TSE Prime",
 ) -> pd.DataFrame:
     """週次PER/PBR時系列を構築。
 
@@ -359,6 +360,7 @@ def build_weekly_per_pbr(
     out["ticker"] = ticker
     out["sector_33"] = sector_33
     out["size_category"] = size_category
+    out["market"] = market
     if shares_latest is not None and shares_latest > 0:
         out["market_cap"] = out["close"] * float(shares_latest)
     else:
@@ -377,6 +379,7 @@ def build_weekly_per_pbr(
             "market_cap",
             "sector_33",
             "size_category",
+            "market",
         ]
     ]
 
@@ -387,6 +390,7 @@ def _process_single(
     ticker: str,
     sector_33: str,
     size_category: str,
+    market: str = "TSE Prime",
 ) -> tuple[pd.DataFrame | None, str | None]:
     """1銘柄分の週次PER/PBR履歴を構築。失敗時は (None, reason)。"""
     weekly_close = _weekly_close_from_cache(ticker)
@@ -408,6 +412,7 @@ def _process_single(
         ttm_eps=ttm_eps,
         bps=bps,
         shares_latest=latest_shares,
+        market=market,
     )
     if df.empty:
         return None, "週次合成結果が空"
@@ -456,12 +461,15 @@ def update_per_pbr_history(
         name = str(row.get("name", ""))
         sector_33 = str(row.get("sector_33", ""))
         size_category = str(row.get("size_category", ""))
+        market = str(row.get("market", "TSE Prime"))
 
         if progress_callback:
             progress_callback(i, total, ticker)
 
         try:
-            df, reason = _process_single(code, name, ticker, sector_33, size_category)
+            df, reason = _process_single(
+                code, name, ticker, sector_33, size_category, market=market
+            )
             if df is None or df.empty:
                 if reason:
                     failures[ticker] = reason

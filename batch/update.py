@@ -39,6 +39,16 @@ def main():
     # キャッシュディレクトリ作成
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Step 0: JPX ユニバース更新 (data_j.xls 取得 + Standard Top 400 再生成)
+    # 7日以内はスキップ (jpx_universe_fetcher.update_universe 内で判定)
+    logger.info("ユニバース更新を確認中 (data_j.xls + Standard Top 400)...")
+    try:
+        from modules.jpx_universe_fetcher import update_universe
+
+        update_universe()
+    except Exception as e:
+        logger.warning(f"ユニバース更新失敗 (既存リストで継続): {e}")
+
     # Step 1: データ取得
     stocks = load_stock_list()
     total = len(stocks)

@@ -941,8 +941,10 @@ def generate_ranking(
             {
                 "code": row["code"],
                 "name": row["name"],
+                "market": row.get("market", "TSE Prime"),
                 "size_category": row.get("size_category", ""),
                 "sector_33": row.get("sector_33", ""),
+                "sector_17": row.get("sector_17", ""),
                 "ticker": ticker,
                 "matched_patterns": "|".join(eval_result["matched_patterns"]),
                 "best_pattern": eval_result["best_pattern"],
