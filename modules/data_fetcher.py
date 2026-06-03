@@ -346,13 +346,14 @@ def get_global_index(ticker: str) -> pd.DataFrame | None:
 
 
 def fetch_financials(ticker: str) -> pd.DataFrame | None:
-    """過去3年+予測の売上高・営業利益率を取得する
+    """過去3年+予測の売上高・営業利益率・EPSを取得する
 
     Returns:
-        DataFrame with columns: period, revenue, op_margin, is_forecast
+        DataFrame with columns: period, revenue, op_margin, eps, is_forecast
         - period: 表示用文字列 (例: "2023年3月期")
         - revenue: 売上高（億円）
         - op_margin: 営業利益率（%）
+        - eps: 1株当たり利益（円/USD等、原通貨）。実績=Diluted EPS、予測=アナリストavg
         - is_forecast: 予測かどうか
     """
     try:
@@ -365,6 +366,7 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
         for col in reversed(stmt.columns):  # 古い順に処理
             revenue = None
             op_income = None
+            eps = None
             # Total Revenue
             for key in ["Total Revenue", "TotalRevenue"]:
                 if key in stmt.index and pd.notna(stmt.loc[key, col]):
@@ -374,6 +376,11 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
             for key in ["Operating Income", "OperatingIncome"]:
                 if key in stmt.index and pd.notna(stmt.loc[key, col]):
                     op_income = float(stmt.loc[key, col])
+                    break
+            # EPS (Diluted優先、なければBasic)
+            for key in ["Diluted EPS", "DilutedEPS", "Basic EPS", "BasicEPS"]:
+                if key in stmt.index and pd.notna(stmt.loc[key, col]):
+                    eps = float(stmt.loc[key, col])
                     break
 
             if revenue is None or revenue == 0:
@@ -388,6 +395,7 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
                     "period": period_label,
                     "revenue": round(revenue / 1e8, 1),  # 億円
                     "op_margin": round(op_margin, 2) if op_margin is not None else None,
+                    "eps": round(eps, 2) if eps is not None else None,
                     "is_forecast": False,
                 }
             )
@@ -401,27 +409,27 @@ def fetch_financials(ticker: str) -> pd.DataFrame | None:
                 for idx_label in rev_est.index:
                     avg_rev = rev_est.loc[idx_label, "avg"]
                     if pd.notna(avg_rev) and avg_rev > 0:
-                        avg_earn = None
+                        # earnings_estimate.avg は EPS 予想（1株当たり）
+                        est_eps = None
                         if (
                             earn_est is not None
                             and not earn_est.empty
                             and "avg" in earn_est.columns
+                            and idx_label in earn_est.index
                         ):
-                            if idx_label in earn_est.index:
-                                avg_earn = earn_est.loc[idx_label, "avg"]
+                            v = earn_est.loc[idx_label, "avg"]
+                            if pd.notna(v):
+                                est_eps = round(float(v), 2)
 
-                        # 予測の営業利益率は概算（earnings≒純利益なので参考値）
-                        est_margin = None
-                        if avg_earn is not None and pd.notna(avg_earn) and avg_rev > 0:
-                            est_margin = round(
-                                float(avg_earn) / float(avg_rev) * 100, 2
-                            )
-
+                        # 予測の営業利益率は yfinance から直接取得できない
+                        # (earnings_estimate は EPS、Operating Margin 予想は提供されない)
+                        # 誤った概算を出すよりは欠損として扱う
                         rows.append(
                             {
                                 "period": f"{idx_label}(予)",
                                 "revenue": round(float(avg_rev) / 1e8, 1),
-                                "op_margin": est_margin,
+                                "op_margin": None,
+                                "eps": est_eps,
                                 "is_forecast": True,
                             }
                         )

@@ -164,3 +164,72 @@ WAVE_TYPES = [
     "ブレイク気味",
     "高ボラ（荒い）",
 ]
+
+# --- JPX 信用取引銘柄別残高 (mtdailyk) ---
+JPX_MARGIN_PAGE_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/margin/index.html"
+)
+JPX_MARGIN_FILE_URL_TEMPLATE = (
+    "https://www.jpx.co.jp/markets/statistics-equities/margin/"
+    "tvdivq0000001r92-att/mtdailyk{date}00.xls"
+)
+JPX_MARGIN_CACHE_DIR = DATA_DIR / "jpx_margin"
+JPX_MARGIN_HISTORY_PARQUET = DATA_DIR / "margin_history.parquet"
+JPX_MARGIN_LATEST_PARQUET = DATA_DIR / "margin_latest.parquet"
+JPX_MARGIN_LOOKBACK_DAYS = 90  # 過去90営業日分を累積（初回バックフィル）
+JPX_MARGIN_DEADLINE_DAYS = 180  # 制度信用は約6ヶ月で期日
+
+# 信用過熱度 判定閾値
+MARGIN_RATIO_HIGH = 5.0  # 信用倍率 >= 5: 買い偏重・戻り売り重い
+MARGIN_RATIO_LOW = 1.0  # 信用倍率 < 1: 売り偏重・踏み上げ余地
+MARGIN_BUY_PCT_WARN = 5.0  # 買残/上場株式数 >= 5%: 警戒
+MARGIN_BUY_PCT_DANGER = 10.0  # 買残/上場株式数 >= 10%: 危険
+MARGIN_VOLDAYS_HEAVY = 20.0  # 買残/平均出来高 >= 20日分: 上値しこり重い
+
+# --- ポートフォリオ管理 ---
+PORTFOLIO_CSV = DATA_DIR / "portfolio.csv"
+PORTFOLIO_TRADES_CSV = DATA_DIR / "portfolio_trades.csv"
+PORTFOLIO_HISTORY_PARQUET = DATA_DIR / "portfolio_history.parquet"
+PORTFOLIO_INITIAL_CSV = DATA_DIR / "portfolio_initial.csv"
+WATCHLIST_CSV = DATA_DIR / "watchlist.csv"
+EXTENDED_UNIVERSE_CSV = DATA_DIR / "extended_universe.csv"
+EXTENDED_RESULTS_CSV = DATA_DIR / "extended_results.csv"
+SIGNAL_LOG_PARQUET = DATA_DIR / "signal_log.parquet"
+
+INITIAL_CAPITAL_JPY = 30_000_000
+
+# --- シグナル閾値 ---
+SIGNAL_LOSS_CUT_PCT = 0.10  # avg_cost から -10% で損切シグナル
+SIGNAL_LOSS_WARNING_PCT = 0.07  # -7% で警告
+SIGNAL_TAKE_PROFIT_PCT = 0.30  # +30% で利確シグナル
+SIGNAL_RSI_BUY_THRESHOLD = 40  # RSI < 40 で押し目買い候補
+SIGNAL_BREAKOUT_LOOKBACK_DAYS = 20  # 直近N日高値ブレイクで上抜けシグナル
+SIGNAL_BREAKOUT_VOLUME_RATIO = 1.5  # 出来高がN倍で確認
+
+# --- トレンド転換検出(下降→上昇) ---
+TREND_TRANSITION_CSV = DATA_DIR / "trend_transition.csv"
+# 直近 N 日と、その前 N 日 を別々に slope 計算して比較
+TT_WINDOW_DAYS = 25  # 直近窓 = 25営業日(約5週)
+# 過去窓 slope の上限(これより下=確かに下降していた)
+TT_PAST_SLOPE_MAX = -0.0005
+# 直近窓 slope の下限(これより上=確かに上昇に転じている)
+TT_RECENT_SLOPE_MIN = 0.001
+# 直近25日の安値からの最低反発率
+TT_MIN_REBOUND_PCT = 5.0
+
+# --- Stage 2 ブレイクアウト検出(レンジ → 全MA上抜け+RSI回復) ---
+# 5214 日本電気硝子の 2025/7 ブレイクアウト型(初動)を機械的に拾う
+RANGE_BREAKOUT_CSV = DATA_DIR / "range_breakout.csv"
+# ベース期: 過去 N 日(うち直近 M 日は除外)で「ほぼレンジ」だったか
+RB_BASE_LOOKBACK_DAYS = 100  # 過去ベース期の長さ
+RB_BASE_EXCLUDE_RECENT_DAYS = 20  # 直近 N 日はベース判定から除外
+RB_BASE_MAX_ABS_SLOPE = 0.0015  # ベース期 slope の絶対値上限(やや下げのレンジもOK)
+RB_BASE_MAX_RANGE_PCT = 30.0  # ベース期の range幅(%)上限
+# MA 構造
+RB_MA_TIGHT_THRESHOLD = 0.06  # (max MA - min MA)/mean MA がこれ以下 = MA束ね中
+RB_BREAKOUT_MAX_ABOVE_MA = 0.15  # close が max(MA) より +15% 以内 = 走り始め
+# RSI 回復
+RB_RSI_LOW_LOOKBACK_DAYS = 30  # 直近 N 日に RSI < lo を経験
+RB_RSI_LOW_THRESHOLD = 40  # RSI 過去最低の閾値
+RB_RSI_NOW_MIN = 40  # 現 RSI 最低
+RB_RSI_NOW_MAX = 70  # 現 RSI 最高(過熱除外)

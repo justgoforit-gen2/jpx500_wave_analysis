@@ -71,6 +71,23 @@ from modules.wave_classifier import compute_indicators, classify
 from modules.strategy_engine import generate_ranking
 from modules.strategy_loader import load_strategy
 from modules.backtester import build_contexts, run_backtest
+from modules.portfolio_manager import (
+    add_position,
+    compute_current_valuation,
+    compute_performance_metrics,
+    initialize_from_template,
+    load_portfolio,
+    load_portfolio_history,
+    record_sell,
+)
+from modules.signal_engine import get_today_signals
+from modules.trend_transition_detector import (
+    detect_transitions,
+    load_trend_transition,
+)
+from modules.range_breakout_detector import (
+    load_range_breakout,
+)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -268,6 +285,299 @@ def is_recommended(row: pd.Series) -> bool:
 # ------------------------------------------------------------------
 # 一覧画面
 # ------------------------------------------------------------------
+def _show_trend_transition_section() -> None:
+    """下降→上昇トレンド転換候補セクション(波形分類タブの冒頭に置く)。
+
+    過去 25 日と直近 25 日の slope を別計算し、符号が反転した銘柄を抽出。
+    既存の wave_classifier は 120 日窓のため転換中の銘柄を取りこぼすが、
+    この検出器はその「早期トランジション」をピンポイントで拾う。
+    """
+    with st.expander(
+        "🔄 トレンド転換検出 — 下降→上昇に切り替わった銘柄(直近25日)",
+        expanded=False,
+    ):
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+        with col1:
+            window = st.number_input(
+                "窓(日)",
+                min_value=10,
+                max_value=60,
+                value=25,
+                step=5,
+                key="tt_window",
+            )
+        with col2:
+            past_max = st.number_input(
+                "過去 slope 上限",
+                min_value=-0.01,
+                max_value=0.0,
+                value=-0.0005,
+                step=0.0001,
+                format="%.4f",
+                key="tt_past_max",
+            )
+        with col3:
+            recent_min = st.number_input(
+                "直近 slope 下限",
+                min_value=0.0,
+                max_value=0.01,
+                value=0.001,
+                step=0.0001,
+                format="%.4f",
+                key="tt_recent_min",
+            )
+        with col4:
+            min_rebound = st.slider(
+                "最低反発率(%)",
+                min_value=0.0,
+                max_value=30.0,
+                value=5.0,
+                step=1.0,
+                key="tt_min_rebound",
+            )
+
+        use_cache = st.checkbox(
+            "キャッシュ(日次バッチで生成)を使う(高速)",
+            value=True,
+            key="tt_use_cache",
+            help="OFF にすると全銘柄を再計算します(数十秒)",
+        )
+
+        if use_cache:
+            tt_df = load_trend_transition()
+            if not tt_df.empty:
+                tt_df = tt_df[
+                    (tt_df["slope_past"] < past_max)
+                    & (tt_df["slope_recent"] > recent_min)
+                    & (tt_df["rebound_pct"] >= min_rebound)
+                ]
+        else:
+            with st.spinner("全銘柄を再計算中..."):
+                tt_df = detect_transitions(
+                    window_days=int(window),
+                    past_slope_max=float(past_max),
+                    recent_slope_min=float(recent_min),
+                    min_rebound_pct=float(min_rebound),
+                )
+
+        if tt_df is None or tt_df.empty:
+            st.info(
+                "条件を満たす銘柄がありません。閾値を緩めるか、"
+                "バッチ更新を実行してください: `python batch/update.py`"
+            )
+            return
+
+        st.caption(
+            f"該当: **{len(tt_df)} 銘柄** "
+            f"(過去 slope < {past_max:.4f} / 直近 slope > {recent_min:.4f} / "
+            f"反発 ≥ {min_rebound:.0f}%)"
+        )
+
+        display = tt_df.copy()
+        if "signal_strength" not in display.columns:
+            display["signal_strength"] = (
+                (display["slope_recent"] - display["slope_past"]) * 1000
+            ).round(2)
+        display = display.sort_values("signal_strength", ascending=False)
+        show_cols = [
+            "code",
+            "name",
+            "sector_33",
+            "size_category",
+            "slope_past",
+            "slope_recent",
+            "signal_strength",
+            "rebound_pct",
+            "today_close",
+            "per",
+            "pbr",
+            "wave_types",
+        ]
+        show_cols = [c for c in show_cols if c in display.columns]
+        renamed = display[show_cols].rename(
+            columns={
+                "code": "コード",
+                "name": "銘柄",
+                "sector_33": "業種",
+                "size_category": "規模",
+                "slope_past": "過去slope",
+                "slope_recent": "直近slope",
+                "signal_strength": "強度",
+                "rebound_pct": "反発(%)",
+                "today_close": "現値",
+                "per": "PER",
+                "pbr": "PBR",
+                "wave_types": "現状の波形",
+            }
+        )
+
+        event = st.dataframe(
+            renamed,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="trend_transition_table",
+            column_config={
+                "過去slope": st.column_config.NumberColumn(format="%.5f"),
+                "直近slope": st.column_config.NumberColumn(format="%.5f"),
+                "強度": st.column_config.NumberColumn(format="%.2f"),
+                "反発(%)": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+        if event and event.selection.rows:
+            r = renamed.iloc[event.selection.rows[0]]
+            row_full = display.iloc[event.selection.rows[0]]
+            st.session_state["selected_code"] = str(r["コード"])
+            st.session_state["selected_name"] = str(r["銘柄"])
+            st.session_state["selected_ticker"] = str(row_full["ticker"])
+            st.session_state["view"] = "detail"
+            st.rerun()
+
+
+def _show_range_breakout_section() -> None:
+    """Stage 2 ブレイクアウト検出セクション。
+
+    「長期レンジ → 全 MA 上抜け + RSI 回復」という Stan Weinstein 式の
+    Stage 2 入り初動を機械的に拾う。5214 日本電気硝子の 2025/7 がリファレンス。
+    """
+    with st.expander(
+        "🚀 Stage 2 ブレイクアウト — レンジ脱出+全MA上抜け+RSI回復(初動候補)",
+        expanded=False,
+    ):
+        st.caption(
+            "**条件**: 過去ベース期がレンジ ／ MA13/26/52週が束ねる ／ "
+            "現値が全 MA を浅く上抜け(+15% 以内) ／ "
+            "RSI が直近30日で 40 を割って回復中(40-70)。"
+            "5214 日本電気硝子の 2025/7 型を捕捉する設定。"
+        )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            max_above = st.slider(
+                "走り始めの浅さ上限(% above max MA)",
+                min_value=0.0,
+                max_value=30.0,
+                value=15.0,
+                step=1.0,
+                key="rb_max_above",
+            )
+        with col2:
+            rsi_now_min = st.slider(
+                "現 RSI 下限",
+                min_value=30,
+                max_value=60,
+                value=40,
+                step=1,
+                key="rb_rsi_now_min",
+            )
+        with col3:
+            rsi_now_max = st.slider(
+                "現 RSI 上限(過熱除外)",
+                min_value=50,
+                max_value=85,
+                value=70,
+                step=1,
+                key="rb_rsi_now_max",
+            )
+
+        golden_only = st.checkbox(
+            "MA がゴールデンオーダ(短>中>長)のみ表示",
+            value=False,
+            key="rb_golden_only",
+            help="ON にすると Stage 2 確定の銘柄に絞られます(銘柄数減)",
+        )
+
+        df_rb = load_range_breakout()
+        if df_rb.empty:
+            st.info(
+                "キャッシュが空です。バッチを実行してください: `python batch/update.py`"
+            )
+            return
+
+        # UI フィルタ適用
+        filtered = df_rb[
+            (df_rb["above_max_ma_pct"] <= max_above)
+            & (df_rb["rsi_now"] >= rsi_now_min)
+            & (df_rb["rsi_now"] <= rsi_now_max)
+        ]
+        if golden_only:
+            filtered = filtered[filtered["golden_order"] == True]  # noqa: E712
+
+        if filtered.empty:
+            st.info("条件を満たす銘柄がありません。閾値を緩めてください")
+            return
+
+        st.caption(f"該当: **{len(filtered)} 銘柄** (強度降順)")
+
+        show_cols = [
+            "code",
+            "name",
+            "sector_33",
+            "size_category",
+            "signal_strength",
+            "above_max_ma_pct",
+            "rsi_now",
+            "rsi_min_recent",
+            "ma_tightness_pct",
+            "golden_order",
+            "close",
+            "ma_short",
+            "ma_mid",
+            "ma_long",
+            "per",
+            "pbr",
+            "wave_types",
+        ]
+        show_cols = [c for c in show_cols if c in filtered.columns]
+        renamed = filtered[show_cols].rename(
+            columns={
+                "code": "コード",
+                "name": "銘柄",
+                "sector_33": "業種",
+                "size_category": "規模",
+                "signal_strength": "強度",
+                "above_max_ma_pct": "浅さ(%)",
+                "rsi_now": "現RSI",
+                "rsi_min_recent": "30日最小RSI",
+                "ma_tightness_pct": "MA束ね(%)",
+                "golden_order": "GoldenOrder",
+                "close": "現値",
+                "ma_short": "MA13週",
+                "ma_mid": "MA26週",
+                "ma_long": "MA52週",
+                "per": "PER",
+                "pbr": "PBR",
+                "wave_types": "波形分類",
+            }
+        )
+
+        event = st.dataframe(
+            renamed,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="range_breakout_table",
+            column_config={
+                "強度": st.column_config.NumberColumn(format="%.1f"),
+                "浅さ(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "現RSI": st.column_config.NumberColumn(format="%.1f"),
+                "30日最小RSI": st.column_config.NumberColumn(format="%.1f"),
+                "MA束ね(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "GoldenOrder": st.column_config.CheckboxColumn(),
+            },
+        )
+        if event and event.selection.rows:
+            r = renamed.iloc[event.selection.rows[0]]
+            row_full = filtered.iloc[event.selection.rows[0]]
+            st.session_state["selected_code"] = str(r["コード"])
+            st.session_state["selected_name"] = str(r["銘柄"])
+            st.session_state["selected_ticker"] = str(row_full["ticker"])
+            st.session_state["view"] = "detail"
+            st.rerun()
+
+
 def show_list_view():
     st.title("JPX500 波形タイプ分類")
 
@@ -277,6 +587,12 @@ def show_list_view():
         data_date = dates.get("latest_data", "不明")
         batch_date = dates.get("batch_run", "不明")
         st.caption(f"株価データ: **{data_date}** 時点 ｜ バッチ実行: {batch_date}")
+
+    # 🚀 Stage 2 ブレイクアウト検出
+    _show_range_breakout_section()
+
+    # 🔄 下降→上昇トレンド転換検出(エクスパンダー、既存の filter には影響しない)
+    _show_trend_transition_section()
 
     results = load_results()
     if results is None:
@@ -357,6 +673,23 @@ def show_list_view():
         label_visibility="collapsed",
     )
 
+    # 信用取引フィルタ (results に margin_ratio 列がある場合のみ)
+    margin_filter = "全て"
+    if "margin_ratio" in results.columns:
+        st.sidebar.subheader("信用取引")
+        margin_filter = st.sidebar.radio(
+            "信用倍率フィルタ",
+            [
+                "全て",
+                "買い偏重 (倍率≥5) しこり警戒",
+                "売り偏重 (倍率<1) 踏み上げ余地",
+                "上値しこり重い (買残≥上場5%)",
+                "データあり",
+            ],
+            index=0,
+            label_visibility="collapsed",
+        )
+
     # ヘルプ表示
     st.sidebar.divider()
     with st.sidebar.expander("使い方・用語の定義"):
@@ -406,6 +739,19 @@ def show_list_view():
             filtered = filtered[rp >= RANGE_PCT_LARGE]
         else:
             filtered = filtered[(rp > RANGE_PCT_SMALL) & (rp < RANGE_PCT_LARGE)]
+
+    # 信用取引フィルタ
+    if margin_filter != "全て" and "margin_ratio" in filtered.columns:
+        if "買い偏重" in margin_filter:
+            filtered = filtered[filtered["margin_ratio"] >= 5.0]
+        elif "売り偏重" in margin_filter:
+            filtered = filtered[
+                (filtered["margin_ratio"] > 0) & (filtered["margin_ratio"] < 1.0)
+            ]
+        elif "上値しこり" in margin_filter:
+            filtered = filtered[filtered["margin_buy_pct_listed"] >= 5.0]
+        elif "データあり" in margin_filter:
+            filtered = filtered[filtered["margin_ratio"].notna()]
 
     # --- サマリーカード ---
     st.markdown("### サマリー")
@@ -1645,6 +1991,18 @@ def show_list_view():
                     "date_str": False,
                 }
 
+            # 個別銘柄モードかつ表示銘柄数が多すぎないときはドット上にラベル表示
+            n_unique = plot_df["code"].nunique()
+            anim_text_col = (
+                "name"
+                if (
+                    anim_unit == "個別銘柄"
+                    and "name" in plot_df.columns
+                    and n_unique <= 80
+                )
+                else None
+            )
+
             fig_anim = px.scatter(
                 plot_df,
                 x="per",
@@ -1660,6 +2018,7 @@ def show_list_view():
                 ),
                 size=size_col,
                 size_max=55 if anim_unit == "業種加重平均" else 45,
+                text=anim_text_col,
                 hover_name="name" if "name" in plot_df.columns else None,
                 hover_data=hover_data,
                 range_x=[
@@ -1683,6 +2042,16 @@ def show_list_view():
                 yaxis_title="PBR",
                 legend_title_text=legend_title,
             )
+            if anim_text_col is not None:
+                fig_anim.update_traces(
+                    textposition="top center",
+                    textfont=dict(size=10),
+                )
+                # アニメーションフレームにも text を伝播
+                for frame in fig_anim.frames or []:
+                    for tr in frame.data:
+                        tr.textposition = "top center"
+                        tr.textfont = dict(size=10)
             # スライダー/再生速度調整
             try:
                 if fig_anim.layout.updatemenus:
@@ -2182,12 +2551,185 @@ def show_detail_view():
                 "period": "期間",
                 "revenue": "売上高（億円）",
                 "op_margin": "営業利益率（%）",
+                "eps": "EPS（円/株）",
                 "is_forecast": "予測",
             }
         )
         st.dataframe(fin_display, use_container_width=True, hide_index=True)
     else:
         st.caption("財務データを取得できませんでした。")
+
+    # === 信用取引残高 ===
+    st.markdown("---")
+    st.markdown("#### 信用取引残高 (JPX公表)")
+    st.caption(
+        "信用倍率=買残÷売残。買偏重(>5)→戻り売り重い／売偏重(<1)→踏み上げ余地。"
+        "JPXは直近1営業日分しか公開しないため、本アプリは日次累積方式。"
+    )
+
+    try:
+        from modules.margin_fetcher import (
+            compute_deadline_calendar,
+            load_margin_history,
+        )
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        m_hist = load_margin_history(ticker)
+        if m_hist is None or len(m_hist) == 0:
+            st.caption(
+                "本銘柄の信用残データは未収集です。バッチが累積するに従い表示されます。"
+            )
+        else:
+            latest_row = m_hist.iloc[-1]
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric(
+                "信用倍率",
+                f"{latest_row['margin_ratio']:.2f}倍",
+                help="買残÷売残。5倍以上で買偏重、1倍未満で売偏重。",
+            )
+            buy_pct = latest_row.get("buy_pct_listed")
+            mc2.metric(
+                "買残/上場株式",
+                f"{buy_pct:.2f}%" if pd.notna(buy_pct) else "-",
+            )
+            sell_pct = latest_row.get("sell_pct_listed")
+            mc3.metric(
+                "売残/上場株式",
+                f"{sell_pct:.2f}%" if pd.notna(sell_pct) else "-",
+            )
+            try:
+                df_price = load_cached(ticker)
+                avg_vol = (
+                    float(df_price["Volume"].tail(20).mean())
+                    if df_price is not None and len(df_price) >= 20
+                    else None
+                )
+                voldays = (
+                    latest_row["buy_balance"] / avg_vol
+                    if avg_vol and avg_vol > 0
+                    else None
+                )
+                mc4.metric(
+                    "しこり消化日数",
+                    f"{voldays:.1f}日" if voldays is not None else "-",
+                    help="買残÷20日平均出来高。20日分以上は上値しこり重い。",
+                )
+            except Exception:
+                mc4.metric("しこり消化日数", "-")
+
+            obs_dt = latest_row["observation_date"]
+            st.caption(f"観測日: {obs_dt} / 累積観測数: {len(m_hist)}件")
+
+            # 時系列チャート (2段: 買残/売残 + 信用倍率)
+            if len(m_hist) >= 2:
+                hist_plot = m_hist.copy()
+                hist_plot["observation_date"] = pd.to_datetime(
+                    hist_plot["observation_date"]
+                )
+
+                fig_m = make_subplots(
+                    rows=2,
+                    cols=1,
+                    shared_xaxes=True,
+                    row_heights=[0.6, 0.4],
+                    vertical_spacing=0.08,
+                    subplot_titles=("信用残高推移 (株数)", "信用倍率"),
+                )
+                fig_m.add_trace(
+                    go.Scatter(
+                        x=hist_plot["observation_date"],
+                        y=hist_plot["buy_balance"],
+                        mode="lines+markers",
+                        name="買残",
+                        line=dict(color="#E91E63", width=2),
+                    ),
+                    row=1,
+                    col=1,
+                )
+                fig_m.add_trace(
+                    go.Scatter(
+                        x=hist_plot["observation_date"],
+                        y=hist_plot["sell_balance"],
+                        mode="lines+markers",
+                        name="売残",
+                        line=dict(color="#1976d2", width=2),
+                    ),
+                    row=1,
+                    col=1,
+                )
+                fig_m.add_trace(
+                    go.Scatter(
+                        x=hist_plot["observation_date"],
+                        y=hist_plot["margin_ratio"],
+                        mode="lines+markers",
+                        name="信用倍率",
+                        line=dict(color="#FF6F00", width=2),
+                        showlegend=False,
+                    ),
+                    row=2,
+                    col=1,
+                )
+                fig_m.add_hline(
+                    y=5.0,
+                    line_dash="dash",
+                    line_color="rgba(255,82,82,0.5)",
+                    row=2,
+                    col=1,
+                    annotation_text="買偏重 (5倍)",
+                    annotation_position="right",
+                )
+                fig_m.add_hline(
+                    y=1.0,
+                    line_dash="dash",
+                    line_color="rgba(76,175,80,0.5)",
+                    row=2,
+                    col=1,
+                    annotation_text="売偏重 (1倍)",
+                    annotation_position="right",
+                )
+                fig_m.update_layout(
+                    height=420,
+                    template="plotly_white",
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.04,
+                        xanchor="right",
+                        x=1,
+                    ),
+                )
+                st.plotly_chart(fig_m, use_container_width=True)
+            else:
+                st.caption(
+                    f"履歴は{len(m_hist)}件のみ。"
+                    "時系列チャートには2件以上の観測が必要です。"
+                )
+
+            # 期日カレンダー
+            calendar = compute_deadline_calendar(ticker)
+            if calendar is not None and len(calendar) > 0:
+                st.markdown("##### 期日売り予想カレンダー (6ヶ月後の制度信用期日)")
+                st.caption(
+                    "新規買い建てから6ヶ月後の期日に強制決済売りが発生。"
+                    "週次集計で予想売り圧を可視化。"
+                )
+                cal_display = calendar.copy()
+                cal_display["deadline_date"] = cal_display["deadline_date"].dt.strftime(
+                    "%Y-%m-%d"
+                )
+                cal_display = cal_display.rename(
+                    columns={
+                        "deadline_date": "期日週",
+                        "expected_selling_shares": "予想売圧(株数)",
+                    }
+                )
+                st.dataframe(
+                    cal_display.head(20), use_container_width=True, hide_index=True
+                )
+    except Exception as e:
+        st.caption(f"信用残データ表示に失敗: {e}")
 
     # === 比較分析 ===
     st.markdown("---")
@@ -3508,6 +4050,357 @@ def show_style_optimizer_view():
 
 
 # ------------------------------------------------------------------
+# ポートフォリオ・ダッシュボード
+# ------------------------------------------------------------------
+def _signal_color_map(severity: str) -> str:
+    return {
+        "critical": "🔴",
+        "warning": "🟡",
+        "info": "🟢",
+    }.get(str(severity), "ℹ️")
+
+
+def _navigate_to_detail(code: str, name: str, ticker: str) -> None:
+    """波形分類タブの詳細ビューへ遷移する。"""
+    st.session_state["selected_code"] = str(code)
+    st.session_state["selected_name"] = str(name)
+    st.session_state["selected_ticker"] = str(ticker)
+    st.session_state["view"] = "detail"
+    st.rerun()
+
+
+def show_portfolio_view():
+    """ポートフォリオ・ダッシュボード(新規タブ)。
+
+    - 投資状況サマリ(総資産 / 損益 / コア-衛星比)
+    - 本日のシグナル(発生時のみ)
+    - 累積パフォーマンスチャート
+    - 保有銘柄テーブル(行クリックで詳細遷移)
+    - 監視銘柄テーブル(同上)
+    """
+    st.title("📊 ポートフォリオ・ダッシュボード")
+
+    # ----- サイドバー操作 -----
+    with st.sidebar:
+        st.header("ポートフォリオ操作")
+
+        with st.expander("🎯 初期ポートフォリオ生成", expanded=False):
+            st.caption(
+                "data/portfolio_initial.csv の構成で 3,000万円分の "
+                "仮想ポジションを一括投入します。"
+            )
+            if st.button("初期投入を実行", key="port_init_btn"):
+                try:
+                    df = initialize_from_template()
+                    st.success(f"初期ポートフォリオを生成しました ({len(df)} 件)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"初期化失敗: {e}")
+
+        with st.expander("➕ ポジション追加(買い)", expanded=False):
+            with st.form("add_position_form"):
+                add_ticker = st.text_input(
+                    "ティッカー (例: 6855.T, NVDA, VOO)", key="add_ticker"
+                )
+                add_name = st.text_input("銘柄名", key="add_name")
+                add_shares = st.number_input(
+                    "株数", min_value=0.0, step=1.0, key="add_shares"
+                )
+                add_cost = st.number_input(
+                    "取得単価(現地通貨)", min_value=0.0, step=0.01, key="add_cost"
+                )
+                add_category = st.selectbox(
+                    "カテゴリ", ["satellite", "core"], key="add_category"
+                )
+                add_submitted = st.form_submit_button("追加")
+            if add_submitted and add_ticker:
+                code_in = add_ticker.replace(".T", "")
+                currency = "JPY" if add_ticker.upper().endswith(".T") else "USD"
+                try:
+                    add_position(
+                        code=code_in,
+                        name=add_name or add_ticker,
+                        ticker=add_ticker,
+                        shares=float(add_shares),
+                        cost=float(add_cost),
+                        currency=currency,
+                        category=add_category,
+                    )
+                    st.success(f"{add_ticker} を追加しました")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"追加失敗: {e}")
+
+        with st.expander("➖ 売却記録", expanded=False):
+            portfolio_for_sell = load_portfolio()
+            sellable = portfolio_for_sell[portfolio_for_sell["category"] != "cash"]
+            if len(sellable) == 0:
+                st.info("売却可能ポジションがありません")
+            else:
+                with st.form("sell_position_form"):
+                    sell_code = st.selectbox(
+                        "銘柄",
+                        sellable["code"].astype(str).tolist(),
+                        format_func=lambda c: (
+                            f"{c} {sellable[sellable['code'].astype(str) == c]['name'].iloc[0]}"
+                        ),
+                        key="sell_code",
+                    )
+                    sell_shares = st.number_input(
+                        "売却株数", min_value=0.0, step=1.0, key="sell_shares"
+                    )
+                    sell_price = st.number_input(
+                        "売却単価(現地通貨)",
+                        min_value=0.0,
+                        step=0.01,
+                        key="sell_price",
+                    )
+                    sell_submitted = st.form_submit_button("売却")
+                if sell_submitted:
+                    try:
+                        record_sell(
+                            code=sell_code,
+                            shares=float(sell_shares),
+                            price=float(sell_price),
+                        )
+                        st.success(f"{sell_code} を {sell_shares} 株売却")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"売却失敗: {e}")
+
+    # ----- メインエリア -----
+    val = compute_current_valuation()
+    perf = compute_performance_metrics()
+
+    if val["total_value"] == 0 and val["cash"] == 0:
+        st.info(
+            "ポートフォリオが空です。サイドバーの「初期ポートフォリオ生成」または "
+            "「ポジション追加」から開始してください。"
+        )
+        return
+
+    # サマリーカード
+    st.caption(f"株価更新: **{val['latest_date'] or '未取得'}** 時点")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric(
+        "総資産",
+        f"¥{val['total_value']:,.0f}",
+        f"{val['pnl_jpy']:+,.0f}",
+    )
+    col2.metric("損益率", f"{val['pnl_pct']:+.2f}%")
+    col3.metric(
+        "コア",
+        f"¥{val['core_value']:,.0f}",
+        f"{val['core_value'] / val['total_value'] * 100:.1f}%"
+        if val["total_value"] > 0
+        else "—",
+    )
+    col4.metric(
+        "衛星",
+        f"¥{val['satellite_value']:,.0f}",
+        f"{val['satellite_value'] / val['total_value'] * 100:.1f}%"
+        if val["total_value"] > 0
+        else "—",
+    )
+    col5.metric(
+        "キャッシュ",
+        f"¥{val['cash']:,.0f}",
+        f"{val['cash'] / val['total_value'] * 100:.1f}%"
+        if val["total_value"] > 0
+        else "—",
+    )
+
+    if perf.get("cumulative_return_pct") is not None:
+        st.caption(
+            f"初期資金 ¥{perf.get('initial_capital_jpy', 30_000_000):,.0f} → 現在 "
+            f"¥{val['total_value']:,.0f} | 累積 {perf['cumulative_return_pct']:+.2f}%"
+            + (
+                f" | 年率換算 {perf['annualized_return_pct']:+.2f}%"
+                if perf.get("annualized_return_pct") is not None
+                else ""
+            )
+            + (
+                f" | 最大DD {perf['max_drawdown_pct']:.2f}%"
+                if perf.get("max_drawdown_pct") is not None
+                else ""
+            )
+        )
+
+    st.divider()
+
+    # ----- 本日のシグナル -----
+    st.subheader("⚡ 本日のシグナル")
+    signals = get_today_signals()
+    if signals.empty:
+        st.info("本日のシグナルなし。アクション不要")
+    else:
+        # 重要度順
+        sev_order = {"critical": 0, "warning": 1, "info": 2}
+        signals = signals.copy()
+        signals["_ord"] = signals["severity"].map(sev_order).fillna(99)
+        signals = signals.sort_values("_ord").drop(columns=["_ord"])
+
+        for _, s in signals.iterrows():
+            badge = _signal_color_map(s["severity"])
+            side = s["side"]
+            label = (
+                "売却推奨"
+                if side == "SELL"
+                else ("買い推奨" if side == "BUY" else "様子見")
+            )
+            msg = (
+                f"{badge} **[{label}] {s['code']} {s['name']}** — "
+                f"{s['signal_type']} | 現値 {s['current_price']:.2f} | "
+                f"{s['message']}"
+            )
+            if s["severity"] == "critical":
+                st.error(msg)
+            elif s["severity"] == "warning":
+                st.warning(msg)
+            else:
+                st.success(msg)
+
+    st.divider()
+
+    # ----- パフォーマンスチャート -----
+    st.subheader("📈 累積パフォーマンス")
+    hist = load_portfolio_history()
+    if hist.empty or len(hist) < 2:
+        st.info("履歴データが2日分未満です。バッチを継続実行することで蓄積されます")
+    else:
+        hist_plot = hist.copy()
+        hist_plot["date"] = pd.to_datetime(hist_plot["date"])
+        hist_plot = hist_plot.sort_values("date")
+        fig = px.line(
+            hist_plot,
+            x="date",
+            y="total_value_jpy",
+            title="ポートフォリオ評価額の推移",
+            labels={"date": "日付", "total_value_jpy": "総資産(円)"},
+        )
+        fig.add_hline(
+            y=30_000_000,
+            line_dash="dot",
+            annotation_text="初期資金 3,000万円",
+            annotation_position="top left",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # ----- 保有銘柄テーブル -----
+    st.subheader("💼 保有銘柄")
+    if val["by_holding"]:
+        holdings_df = pd.DataFrame(val["by_holding"])
+        holdings_df = holdings_df.sort_values("value_jpy", ascending=False)
+        display = holdings_df[
+            [
+                "code",
+                "name",
+                "category",
+                "shares",
+                "avg_cost",
+                "last_price",
+                "currency",
+                "value_jpy",
+                "pnl_jpy",
+                "pnl_pct",
+                "weight_pct",
+            ]
+        ].rename(
+            columns={
+                "code": "コード",
+                "name": "銘柄",
+                "category": "区分",
+                "shares": "株数",
+                "avg_cost": "取得単価",
+                "last_price": "現値",
+                "currency": "通貨",
+                "value_jpy": "評価額(円)",
+                "pnl_jpy": "損益(円)",
+                "pnl_pct": "損益率(%)",
+                "weight_pct": "比率(%)",
+            }
+        )
+        event = st.dataframe(
+            display,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="portfolio_table",
+            column_config={
+                "評価額(円)": st.column_config.NumberColumn(format="¥%.0f"),
+                "損益(円)": st.column_config.NumberColumn(format="¥%.0f"),
+                "損益率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "比率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            },
+        )
+        if event and event.selection.rows:
+            r = display.iloc[event.selection.rows[0]]
+            ticker_lookup = holdings_df.iloc[event.selection.rows[0]]["ticker"]
+            _navigate_to_detail(r["コード"], r["銘柄"], ticker_lookup)
+    else:
+        st.info("保有なし")
+
+    st.divider()
+
+    # ----- 監視銘柄テーブル -----
+    st.subheader("👁 監視銘柄")
+    from config.settings import WATCHLIST_CSV
+
+    if Path(WATCHLIST_CSV).exists():
+        watch = pd.read_csv(WATCHLIST_CSV, encoding="utf-8-sig", dtype={"code": str})
+        if len(watch) > 0:
+            # 最新価格を併記
+            latest_prices = []
+            for _, w in watch.iterrows():
+                df_cache = load_cached(str(w["ticker"]))
+                if df_cache is not None and not df_cache.empty:
+                    latest_prices.append(float(df_cache["Close"].iloc[-1]))
+                else:
+                    latest_prices.append(None)
+            watch_disp = watch.copy()
+            watch_disp["last_price"] = latest_prices
+            watch_disp = watch_disp[
+                [
+                    "code",
+                    "name",
+                    "ticker",
+                    "category",
+                    "target_price",
+                    "last_price",
+                    "notes",
+                ]
+            ].rename(
+                columns={
+                    "code": "コード",
+                    "name": "銘柄",
+                    "ticker": "Ticker",
+                    "category": "区分",
+                    "target_price": "目標価格",
+                    "last_price": "現値",
+                    "notes": "メモ",
+                }
+            )
+            event2 = st.dataframe(
+                watch_disp,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="watchlist_table",
+            )
+            if event2 and event2.selection.rows:
+                r = watch_disp.iloc[event2.selection.rows[0]]
+                _navigate_to_detail(r["コード"], r["銘柄"], r["Ticker"])
+        else:
+            st.info("監視銘柄なし")
+    else:
+        st.info("watchlist.csv がありません")
+
+
+# ------------------------------------------------------------------
 # メイン
 # ------------------------------------------------------------------
 def main():
@@ -3519,20 +4412,23 @@ def main():
         show_detail_view()
         return
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"]
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["ポートフォリオ", "波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"]
     )
 
     with tab1:
-        show_list_view()
+        show_portfolio_view()
 
     with tab2:
-        show_strategy_view()
+        show_list_view()
 
     with tab3:
-        show_backtest_view()
+        show_strategy_view()
 
     with tab4:
+        show_backtest_view()
+
+    with tab5:
         show_style_optimizer_view()
 
 

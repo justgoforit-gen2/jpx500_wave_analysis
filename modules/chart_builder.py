@@ -421,10 +421,10 @@ def build_comparison_chart(
 
 
 def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
-    """売上高(棒グラフ) + 営業利益率(折れ線)の二軸チャートを生成
+    """売上高(棒) + 営業利益率(線) + EPS(線)の三軸チャートを生成
 
     Args:
-        fin_df: columns = [period, revenue, op_margin, is_forecast]
+        fin_df: columns = [period, revenue, op_margin, eps, is_forecast]
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -470,6 +470,51 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
             secondary_y=True,
         )
 
+    # EPS の折れ線（第3軸 yaxis3、実績は実線・予測は破線で繋ぐ）
+    eps_mask = fin_df["eps"].notna() if "eps" in fin_df.columns else None
+    if eps_mask is not None and eps_mask.any():
+        eps_df = fin_df[eps_mask].reset_index(drop=True)
+        # 実績と予測を分離して別trace（破線で予測を表現）
+        actual = eps_df[~eps_df["is_forecast"]]
+        forecast = eps_df[eps_df["is_forecast"]]
+
+        fig.add_trace(
+            go.Scatter(
+                x=actual["period"],
+                y=actual["eps"],
+                mode="lines+markers+text",
+                name="EPS（円/株）",
+                line=dict(color="#2E7D32", width=2.5),
+                marker=dict(size=8, color="#2E7D32", symbol="diamond"),
+                text=[f"{v:.1f}" for v in actual["eps"]],
+                textposition="bottom center",
+                textfont=dict(size=11, color="#2E7D32"),
+                yaxis="y3",
+            )
+        )
+        if len(forecast) > 0:
+            # 実績の最終点と予測を繋ぐ
+            if len(actual) > 0:
+                bridge_x = [actual["period"].iloc[-1]] + forecast["period"].tolist()
+                bridge_y = [actual["eps"].iloc[-1]] + forecast["eps"].tolist()
+            else:
+                bridge_x = forecast["period"].tolist()
+                bridge_y = forecast["eps"].tolist()
+            fig.add_trace(
+                go.Scatter(
+                    x=bridge_x,
+                    y=bridge_y,
+                    mode="lines+markers+text",
+                    name="EPS（予想）",
+                    line=dict(color="#66BB6A", width=2, dash="dash"),
+                    marker=dict(size=8, color="#66BB6A", symbol="diamond-open"),
+                    text=[""] + [f"{v:.1f}" for v in forecast["eps"]],
+                    textposition="bottom center",
+                    textfont=dict(size=11, color="#66BB6A"),
+                    yaxis="y3",
+                )
+            )
+
     # 予測部分に背景色
     forecast_periods = fin_df[fin_df["is_forecast"]]["period"].tolist()
     for fp in forecast_periods:
@@ -480,9 +525,11 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
             line_width=0,
         )
 
+    # 第3軸 (EPS) のレイアウト: 右側さらに外、プロット領域を縮めて配置
+    has_eps = eps_mask is not None and eps_mask.any()
     fig.update_layout(
-        height=400,
-        margin=dict(l=10, r=10, t=40, b=10),
+        height=420,
+        margin=dict(l=10, r=70 if has_eps else 10, t=40, b=10),
         template="plotly_white",
         showlegend=True,
         legend=dict(
@@ -494,6 +541,18 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
             font=dict(size=10),
         ),
         bargap=0.3,
+        xaxis=dict(domain=[0, 0.93] if has_eps else [0, 1]),
+        yaxis3=dict(
+            title=dict(text="EPS（円/株）", font=dict(color="#2E7D32")),
+            tickfont=dict(color="#2E7D32"),
+            overlaying="y",
+            side="right",
+            position=1.0,
+            anchor="free",
+            showgrid=False,
+        )
+        if has_eps
+        else None,
     )
 
     fig.update_yaxes(title_text="売上高（億円）", secondary_y=False)
@@ -502,7 +561,7 @@ def build_financials_chart(fin_df: pd.DataFrame) -> go.Figure:
     # 予測がある場合、凡例注記
     if fin_df["is_forecast"].any():
         fig.add_annotation(
-            text="※ 薄色 = アナリスト予測（参考値）",
+            text="※ 薄色/破線 = アナリスト予測（参考値）",
             xref="paper",
             yref="paper",
             x=0,
