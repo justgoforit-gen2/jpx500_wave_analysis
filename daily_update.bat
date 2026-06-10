@@ -11,10 +11,18 @@ REM      プログラム: C:\Users\justg\Documents\python_projects\dify_projects
 REM   4. 条件: 「コンピューターをAC電源で使用している場合のみ」のチェックを外す
 
 cd /d "%~dp0"
+if not exist "logs" mkdir logs
 echo [%date% %time%] Daily update started >> data\daily_update_history.log
+
+REM --- perf ログ: バッチ全体の開始時刻記録 ---
+set BATCH_START=%time%
+.venv\Scripts\python.exe -c "import csv,os,datetime; p='logs/batch-perf.csv'; exists=os.path.exists(p); f=open(p,'a',newline=''); w=csv.writer(f); w.writerow(['date','step','elapsed_sec']) if not exists else None; w.writerow([datetime.datetime.now().strftime('%%Y-%%m-%%d %%H:%%M:%%S'),'batch_start',0]); f.close()"
 
 .venv\Scripts\python.exe batch\update.py
 set JPX_UPDATE_RC=!ERRORLEVEL!
+
+REM --- perf ログ: バッチ全体の終了時刻記録 ---
+.venv\Scripts\python.exe -c "import csv,os,datetime; p='logs/batch-perf.csv'; f=open(p,'a',newline=''); w=csv.writer(f); w.writerow([datetime.datetime.now().strftime('%%Y-%%m-%%d %%H:%%M:%%S'),'batch_end',0]); f.close()"
 
 echo [%date% %time%] Daily update finished (exit code: !JPX_UPDATE_RC!) >> data\daily_update_history.log
 

@@ -1,5 +1,6 @@
 """設定値（窓長、閾値、分類境界など）"""
 
+import os
 from pathlib import Path
 
 # --- パス ---
@@ -44,7 +45,10 @@ JPX_FETCH_SLEEP_SEC = 1
 
 # --- 資本効率改善期待スクリーナー (CES = Capital Efficiency Screener) ---
 NAIBU_DB_PATH = Path(
-    "C:/Users/justg/Documents/python_projects/dify_projects/naibu-ryuho-app/data.db"
+    os.getenv(
+        "NAIBU_DB_PATH",
+        str(Path(__file__).resolve().parents[2] / "naibu-ryuho-app" / "data.db"),
+    )
 )
 NAIBU_API_BASE_URL = "http://localhost:8000"
 NAIBU_FETCH_TIMEOUT_SEC = 10
@@ -165,7 +169,7 @@ WAVE_TYPES = [
     "高ボラ（荒い）",
 ]
 
-# --- JPX 信用取引銘柄別残高 (mtdailyk) ---
+# --- JPX 信用取引銘柄別残高 (mtdailyk = 日々公表銘柄のみ・日次) ---
 JPX_MARGIN_PAGE_URL = (
     "https://www.jpx.co.jp/markets/statistics-equities/margin/index.html"
 )
@@ -178,6 +182,33 @@ JPX_MARGIN_HISTORY_PARQUET = DATA_DIR / "margin_history.parquet"
 JPX_MARGIN_LATEST_PARQUET = DATA_DIR / "margin_latest.parquet"
 JPX_MARGIN_LOOKBACK_DAYS = 90  # 過去90営業日分を累積（初回バックフィル）
 JPX_MARGIN_DEADLINE_DAYS = 180  # 制度信用は約6ヶ月で期日
+
+# --- JPX 銘柄別信用取引週末残高 (syumatsu = 全プライム銘柄・週次 PDF) ---
+# 日々公表銘柄(mtdailyk)に乗らない優良大型株(SBG等)はこちらでしかカバーできない。
+# 各週金曜時点の残高を翌週水曜頃にPDFで公表。
+JPX_MARGIN_WEEKLY_PAGE_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/margin/05.html"
+)
+JPX_MARGIN_WEEKLY_FILE_URL_TEMPLATE = (
+    "https://www.jpx.co.jp/markets/statistics-equities/margin/"
+    "tvdivq0000001rnl-att/syumatsu{date}00.pdf"
+)
+JPX_MARGIN_WEEKLY_CACHE_DIR = DATA_DIR / "jpx_margin_weekly"
+JPX_MARGIN_WEEKLY_HISTORY_PARQUET = DATA_DIR / "margin_weekly_history.parquet"
+JPX_MARGIN_WEEKLY_LATEST_PARQUET = DATA_DIR / "margin_weekly_latest.parquet"
+JPX_MARGIN_WEEKLY_LOOKBACK_WEEKS = 12  # 過去12週分を累積
+
+# --- 株探 週次信用残バックフィル (3年以上のヒストリ取得用) ---
+# JPXは直近5週しかアーカイブを公開しないため、株探の公開ページから
+# 過去の週次信用残データを取得して履歴を補完する。
+KABUTAN_MARGIN_URL_TEMPLATE = (
+    "https://kabutan.jp/stock/kabuka?code={code4}&ashi=shin&page={page}"
+)
+KABUTAN_MARGIN_CACHE_DIR = DATA_DIR / "kabutan_margin"
+KABUTAN_MARGIN_HISTORY_PARQUET = DATA_DIR / "margin_kabutan_history.parquet"
+KABUTAN_FETCH_SLEEP_SEC = 2.0  # ページ取得間のスリープ (サイト負荷配慮)
+KABUTAN_FETCH_TIMEOUT_SEC = 20
+KABUTAN_DEFAULT_MAX_PAGES = 5  # 約3年分相当
 
 # 信用過熱度 判定閾値
 MARGIN_RATIO_HIGH = 5.0  # 信用倍率 >= 5: 買い偏重・戻り売り重い

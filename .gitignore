@@ -225,7 +225,7 @@ data/style_optimization*.csv
 # Local scratch / e2e artifacts
 test_screenshots/
 test_debug.py
-test_playwright.py
+# test_playwright.py  # Phase 2-4 E2E smoke test (now tracked)
 nul
 
 # JPX investor type raw xls cache (regenerable, ~17MB)

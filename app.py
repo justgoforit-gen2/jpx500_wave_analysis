@@ -2570,17 +2570,29 @@ def show_detail_view():
     try:
         from modules.margin_fetcher import (
             compute_deadline_calendar,
-            load_margin_history,
+            load_margin_history_combined,
         )
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
 
-        m_hist = load_margin_history(ticker)
+        # 統合履歴 (日次=日々公表銘柄 + 週次=全プライム銘柄)
+        m_hist = load_margin_history_combined(ticker)
         if m_hist is None or len(m_hist) == 0:
             st.caption(
                 "本銘柄の信用残データは未収集です。バッチが累積するに従い表示されます。"
             )
         else:
+            primary_source = m_hist.iloc[-1].get("source", "unknown")
+            if primary_source == "weekly":
+                st.caption(
+                    "データソース: **週次 (syumatsu)** — 全プライム銘柄対象。"
+                    "毎週金曜時点の残高を翌週公表。"
+                )
+            else:
+                st.caption(
+                    "データソース: **日次 (mtdailyk)** — 日々公表銘柄対象。"
+                    "前日終値の残高を翌日公表。"
+                )
             latest_row = m_hist.iloc[-1]
             mc1, mc2, mc3, mc4 = st.columns(4)
             mc1.metric(
@@ -2810,6 +2822,14 @@ def show_detail_view():
         range_h = live_indicators["range_high"] if live_indicators else None
         range_l = live_indicators["range_low"] if live_indicators else None
 
+        # 信用倍率履歴 (日次 + 週次を統合) を取得してチャート4段目に表示
+        try:
+            from modules.margin_fetcher import load_margin_history_combined
+
+            margin_hist_chart = load_margin_history_combined(ticker)
+        except Exception:
+            margin_hist_chart = None
+
         fig = build_chart(
             df,
             ticker=ticker,
@@ -2822,6 +2842,7 @@ def show_detail_view():
             show_bb=show_bb,
             earnings_dates=earnings_dates,
             overlays=overlays if overlays else None,
+            margin_history=margin_hist_chart,
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -2831,12 +2852,33 @@ def show_detail_view():
     if df is not None and (
         comparison_tickers or (overlays and comparison_tickers is not None)
     ):
+        # 比較チャート専用の期間切り替え (ラジオボタン)
+        # 評価窓とは独立して、ユーザーが見たい期間で比較できる
+        st.markdown("---")
+        st.markdown("#### 比較チャート")
+        comp_period_options = {
+            "3ヶ月": 63,
+            "6ヶ月": 126,
+            "1年": 252,
+            "2年": 504,
+            "3年": 756,
+        }
+        comp_period_label = st.radio(
+            "比較期間",
+            list(comp_period_options.keys()),
+            index=2,  # デフォルト1年
+            horizontal=True,
+            key=f"comp_period_{ticker}",
+            help="比較チャート・相関係数の集計期間。波形分析の評価窓とは独立。",
+        )
+        comp_window = min(comp_period_options[comp_period_label], len(df))
+
         # 比較対象のデータを収集
         comp_data_list = []
         return_data = {}
 
-        # メイン銘柄の日次リターン（評価窓内）
-        main_w = df.tail(window)
+        # メイン銘柄の日次リターン（比較期間内）
+        main_w = df.tail(comp_window)
         main_returns = main_w["Close"].pct_change().dropna()
         return_data[f"{code} {name}"] = main_returns
 
@@ -2878,19 +2920,20 @@ def show_detail_view():
                 return_data[nikkei_label] = nk_w["Close"].pct_change().dropna()
 
         if comp_data_list:
-            st.markdown("---")
-            st.markdown("#### 比較チャート")
             comp_fig = build_comparison_chart(
                 main_name=f"{code} {name}",
                 main_df=df,
                 comparisons=comp_data_list,
-                window=window,
+                window=comp_window,
             )
             st.plotly_chart(comp_fig, use_container_width=True)
+            st.caption(
+                f"比較期間: {comp_period_label} ({comp_window}営業日) — 開始日=100に正規化"
+            )
 
             # 相関係数
             if len(return_data) >= 2:
-                st.markdown("#### 相関係数（評価窓内の日次リターン）")
+                st.markdown(f"#### 相関係数（{comp_period_label}内の日次リターン）")
                 corr_df = pd.DataFrame(return_data).corr()
                 st.dataframe(corr_df.style.format("{:.4f}"), use_container_width=True)
 
@@ -4403,6 +4446,282 @@ def show_portfolio_view():
 # ------------------------------------------------------------------
 # メイン
 # ------------------------------------------------------------------
+def _tab_moat_score() -> None:
+    """Moat Score タブ: 1銘柄のレーダーチャート + スコア表示。"""
+    import plotly.graph_objects as go
+
+    st.header("Moat Score — バフェット流 7軸分析")
+
+    default_code = st.session_state.get("moat_code", "7203")
+    code_input = st.text_input(
+        "銘柄コード (4桁)", value=default_code, key="moat_code_input"
+    )
+
+    if st.button("スコア算出", key="moat_calc_btn"):
+        st.session_state["moat_code"] = code_input
+
+    code = st.session_state.get("moat_code", "7203")
+
+    with st.spinner(f"{code} のスコアを算出中..."):
+        try:
+            from modules.moat_score import MoatScoreEngine
+
+            engine = MoatScoreEngine()
+            result = engine.compute(code)
+        except Exception as e:
+            st.error(f"スコア算出エラー: {e}")
+            return
+
+    if result["total_score"] is None:
+        st.warning(
+            f"⚠️ naibu API 未起動のためスコア算出不完全。"
+            f"エラー: {result['explanation'].get('errors', '')}"
+        )
+        st.write("利用可能な軸のスコア:")
+
+    axes = [
+        "technical",
+        "fundamental",
+        "foreign_flow",
+        "growth",
+        "growth_sector",
+        "moat_pp",
+        "policy",
+    ]
+    labels = [
+        "テクニカル",
+        "ファンダ",
+        "外国人フロー",
+        "成長",
+        "成長分野",
+        "PP",
+        "政策",
+    ]
+    scores = [result.get(f"axis_{a}") or 0.0 for a in axes]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatterpolar(
+            r=scores + [scores[0]],
+            theta=labels + [labels[0]],
+            fill="toself",
+            name=code,
+            line_color="royalblue",
+        )
+    )
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
+        showlegend=True,
+        title=f"{code} Moat Score レーダー",
+        height=400,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    if result["total_score"] is not None:
+        col1, col2 = st.columns(2)
+        col1.metric("総合スコア", f"{result['total_score']:.2f} / 10")
+        col2.metric("算出日", result["date"])
+
+    with st.expander("軸別スコア詳細"):
+        for ax, label in zip(axes, labels):
+            score_val = result.get(f"axis_{ax}")
+            expl = result["explanation"].get(ax, "")
+            score_str = f"{score_val:.1f}" if score_val is not None else "N/A"
+            st.write(f"**{label}**: {score_str} — {expl}")
+
+
+def _tab_moat_ranking() -> None:
+    """ランキングタブ: parquet から上位銘柄一覧 + 今朝の Top10 + 決算予定。"""
+    st.header("Moat Score ランキング")
+
+    from modules.moat_score import load_moat_scores
+
+    df = load_moat_scores()
+    if df is None or df.empty:
+        st.info(
+            "moat_scores.parquet が見つかりません。\n\n"
+            "`python batch/update.py` を実行するか、API `POST /api/moat-score/recompute` で生成してください。"
+        )
+        return
+
+    # ── 今朝の Top10 ハイライト枠 ────────────────────────────────────────────
+    st.subheader("今朝の Top10")
+    if "date" in df.columns:
+        latest_date = str(df["date"].max())[:10]
+        top10 = (
+            df[df["date"].astype(str).str[:10] == latest_date]
+            .sort_values("total_score", ascending=False)
+            .head(10)
+        )
+        if not top10.empty:
+            st.caption(f"算出日: {latest_date}")
+            top10_cols = [
+                c
+                for c in [
+                    "rank",
+                    "code",
+                    "total_score",
+                    "axis_moat_pp",
+                    "axis_fundamental",
+                ]
+                if c in top10.columns
+            ]
+            st.dataframe(
+                top10[top10_cols].reset_index(drop=True),
+                use_container_width=True,
+                height=200,
+            )
+            st.caption(
+                "コードをコピーして「Moat Score」タブに貼り付けると詳細を確認できます。"
+            )
+
+    st.divider()
+
+    # ── ランキング全体 ────────────────────────────────────────────────────────
+    top_n = st.slider("表示件数", 10, 200, 20, step=10)
+
+    sector_options = ["全業種"]
+    if "code" in df.columns:
+        from config.settings import RESULTS_CSV
+
+        if RESULTS_CSV.exists():
+            res_df = pd.read_csv(RESULTS_CSV, dtype={"code": str})
+            if "sector_33" in res_df.columns:
+                sectors = sorted(res_df["sector_33"].dropna().unique().tolist())
+                sector_options += sectors
+
+    selected_sector = st.selectbox("業種フィルタ", sector_options)
+
+    display_df = df.sort_values("total_score", ascending=False).copy()
+
+    if selected_sector != "全業種" and "code" in display_df.columns:
+        from config.settings import RESULTS_CSV
+
+        if RESULTS_CSV.exists():
+            res_df = pd.read_csv(RESULTS_CSV, dtype={"code": str})
+            sector_codes = res_df[
+                res_df["sector_33"].str.contains(selected_sector, na=False)
+            ]["code"].tolist()
+            display_df = display_df[display_df["code"].isin(sector_codes)]
+
+    display_df = display_df.head(top_n).reset_index(drop=True)
+
+    show_cols = [
+        c
+        for c in [
+            "rank",
+            "code",
+            "date",
+            "total_score",
+            "axis_technical",
+            "axis_fundamental",
+            "axis_moat_pp",
+            "axis_growth",
+            "axis_policy",
+        ]
+        if c in display_df.columns
+    ]
+    st.dataframe(display_df[show_cols], use_container_width=True)
+
+    csv_data = display_df.to_csv(index=False, encoding="utf-8-sig")
+    st.download_button(
+        "CSVダウンロード",
+        data=csv_data.encode("utf-8-sig"),
+        file_name=f"moat_ranking_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
+
+    st.divider()
+
+    # ── 決算予定 × Moat Top50 ─────────────────────────────────────────────────
+    st.subheader("決算予定 × Moat Top50")
+    from config.settings import EARNINGS_COMBINED_CSV
+
+    if EARNINGS_COMBINED_CSV.exists():
+        try:
+            earnings_df = pd.read_csv(EARNINGS_COMBINED_CSV, dtype={"code": str})
+            moat_top50 = df.sort_values("total_score", ascending=False).head(50)
+            if "code" in earnings_df.columns and "code" in moat_top50.columns:
+                today = pd.Timestamp.now().normalize()
+                biz_days_ahead = pd.offsets.BDay(5)
+                deadline = today + biz_days_ahead
+                date_col = next(
+                    (
+                        c
+                        for c in earnings_df.columns
+                        if "date" in c.lower() or "日" in c
+                    ),
+                    None,
+                )
+                if date_col:
+                    earnings_df[date_col] = pd.to_datetime(
+                        earnings_df[date_col], errors="coerce"
+                    )
+                    upcoming = earnings_df[
+                        (earnings_df[date_col] >= today)
+                        & (earnings_df[date_col] <= deadline)
+                    ]
+                    merged = upcoming.merge(
+                        moat_top50[["code", "total_score", "rank"]],
+                        on="code",
+                        how="inner",
+                    ).sort_values("total_score", ascending=False)
+                    if not merged.empty:
+                        top10_flag = merged.index[:10]
+
+                        def _hl(row):
+                            style = [""] * len(row)
+                            if row.name in top10_flag:
+                                style = ["background-color: #fffacd"] * len(row)
+                            return style
+
+                        st.dataframe(
+                            merged.style.apply(_hl, axis=1),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info(
+                            "直近5営業日の決算予定銘柄 (Moat Top50内) はありません。"
+                        )
+                else:
+                    st.caption("earnings データに日付列が見つかりません。")
+        except Exception as e:
+            st.caption(f"決算予定データ取得エラー: {e}")
+    else:
+        st.caption("earnings_combined.csv が見つかりません。")
+
+
+def _show_policy_freshness_indicator() -> None:
+    """policy_signals.json の鮮度インジケータを表示する。7日超過で赤字警告。"""
+    import json
+    from datetime import date
+
+    from config.settings import DATA_DIR
+
+    signals_path = DATA_DIR / "policy_signals.json"
+    if not signals_path.exists():
+        return
+    try:
+        with signals_path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        updated_at_str = data.get("updated_at", "")
+        if not updated_at_str:
+            return
+        updated_at = date.fromisoformat(str(updated_at_str)[:10])
+        days_elapsed = (date.today() - updated_at).days
+        if days_elapsed <= 7:
+            st.success(
+                f"✅ policy_signals.json 最終更新: {updated_at} ({days_elapsed}日前)"
+            )
+        else:
+            st.error(
+                f"⚠️ policy_signals.json が {days_elapsed}日間未更新です ({updated_at})。"
+                " VSCode で `/policy-update` を実行してください。"
+            )
+    except Exception:
+        pass
+
+
 def main():
     if "view" not in st.session_state:
         st.session_state["view"] = "list"
@@ -4412,8 +4731,18 @@ def main():
         show_detail_view()
         return
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["ポートフォリオ", "波形分類", "ABCD戦略", "バックテスト", "投資スタイル最適化"]
+    _show_policy_freshness_indicator()
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+        [
+            "ポートフォリオ",
+            "波形分類",
+            "ABCD戦略",
+            "バックテスト",
+            "投資スタイル最適化",
+            "Moat Score",
+            "ランキング",
+        ]
     )
 
     with tab1:
@@ -4430,6 +4759,12 @@ def main():
 
     with tab5:
         show_style_optimizer_view()
+
+    with tab6:
+        _tab_moat_score()
+
+    with tab7:
+        _tab_moat_ranking()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
     "allow": [
       "Bash(python *)",
       "Bash(python -m *)",
+      "Bash(uv *)",
       "Bash(streamlit *)",
       "Bash(uvicorn *)",
       "Bash(pytest *)",
@@ -15,24 +16,78 @@
       "Bash(pip show *)",
       "Bash(pip list *)",
       "Bash(curl *)",
+      "Bash(time *)",
       "Bash(mkdir *)",
       "Bash(touch *)",
       "Bash(ls *)",
       "Bash(cat *)",
       "Bash(kill *)",
-      "Bash(lsof *)"
+      "Bash(lsof *)",
+      "Bash(sqlite3 *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(gh run *)",
+      "Bash(gh pr *)",
+      "Bash(gh workflow *)",
+      "mcp__gdp__*",
+      "mcp__estat__*",
+      "mcp__jpx500__get_*",
+      "mcp__jpx500__list_*",
+      "mcp__naibu__get_*",
+      "mcp__naibu__list_*",
+      "mcp__naibu__screen",
+      "mcp__naibu__pricing_power",
+      "mcp__naibu__activist_screen",
+      "mcp__naibu__industry_aggregate",
+      "mcp__moat_score__rank_by_moat",
+      "mcp__moat_score__explain_score",
+      "mcp__moat_score__list_policy_signals",
+      "mcp__mindmap__expand",
+      "mcp__mindmap__to_mermaid",
+      "mcp__mindmap__list_saved"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(sqlite3 * .schema)",
+      "mcp__mindmap__save",
+      "mcp__moat_score__compute_moat_score"
     ],
     "deny": [
       "Write(.env)",
       "Write(.env.*)",
       "Write(**/.env)",
+      "Write(data/processed/*.csv)",
+      "Write(data/*.db)",
+      "Write(data/*.parquet)",
+      "Write(../naibu-ryuho-app/data/*.db)",
+      "Write(../naibu-ryuho-app/raw/**)",
       "Bash(rm -rf *)",
       "Bash(git push --force *)",
       "Bash(git push -f *)",
       "Bash(git reset --hard *)"
-    ],
-    "ask": [
-      "Bash(git push *)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null); if [ \"$branch\" = \"main\" ]; then ts=$(date +%Y%m%d-%H%M%S); new_branch=\"feature/dev-${ts}\"; git checkout -b \"$new_branch\" 2>/dev/null; printf '{\"systemMessage\": \"[安全ガード] mainブランチへの直接変更を防止しました。新ブランチ %s に自動切り替えしました。\"}' \"$new_branch\"; fi",
+            "statusMessage": "ブランチ確認中..."
+          }
+        ]
+      }
     ]
   }
 }

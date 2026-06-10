@@ -322,7 +322,42 @@ def main():
     except Exception as e:
         logger.warning(f"シグナル生成に失敗: {e}")
 
+    # Step 9: MoatScore 全銘柄計算 → moat_scores.parquet 更新
+    logger.info("MoatScore 全銘柄計算を開始...")
+    _step9_start = time.time()
+    try:
+        from modules.moat_score import MoatScoreEngine, save_moat_scores
+
+        stocks = load_stock_list()
+        all_codes = list(stocks["code"].dropna().astype(str).unique())
+        engine = MoatScoreEngine()
+        moat_results = engine.compute_bulk(all_codes)
+        save_moat_scores(moat_results)
+        scored = sum(1 for r in moat_results if r["total_score"] is not None)
+        logger.info(f"MoatScore 完了: {scored}/{len(all_codes)} 銘柄スコア算出")
+        _log_perf("moat_score_bulk", time.time() - _step9_start)
+    except Exception as e:
+        logger.warning(f"MoatScore 計算失敗 (継続): {e}")
+
     logger.info("バッチ更新完了")
+
+
+def _log_perf(step: str, elapsed_sec: float) -> None:
+    """バッチステップのパフォーマンスを logs/batch-perf.csv に追記する。"""
+    import csv
+    from datetime import datetime
+
+    logs_dir = Path(__file__).resolve().parent.parent / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    perf_csv = logs_dir / "batch-perf.csv"
+    write_header = not perf_csv.exists()
+    with perf_csv.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["date", "step", "elapsed_sec"])
+        writer.writerow(
+            [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), step, round(elapsed_sec, 1)]
+        )
 
 
 if __name__ == "__main__":

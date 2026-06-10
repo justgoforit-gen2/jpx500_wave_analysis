@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "gdp": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/GDP_distribution/mcp_server/server.py"]
+    },
+    "estat": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/estat_mcp_server/server.py"]
+    },
+    "mindmap": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/mindmap_and_mice/mcp_server/server.py"]
+    },
+    "jpx500": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/jpx500_wave_analysis/mcp_server/server.py"]
+    },
+    "naibu": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/naibu-ryuho-app/mcp_server/server.py"]
+    },
+    "moat_score": {
+      "command": "python",
+      "args": ["/workspaces/dify_projects/jpx500_wave_analysis/mcp_server/moat_score_server.py"]
+    }
+  }
+}

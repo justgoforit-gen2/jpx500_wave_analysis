@@ -11,3 +11,4 @@ requests>=2.33.0
 pyyaml>=6.0
 fastapi>=0.110
 uvicorn[standard]>=0.27
+pypdf>=4.0
