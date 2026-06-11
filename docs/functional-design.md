@@ -201,12 +201,14 @@ parquet キャッシュを読み込み (バッチが書き込んだもの)、キ
 
 ### F-04: ランキングタブ
 
-1. `GET /api/moat-score/ranking?top=50` 呼び出し
+1. `moat_scores.parquet` + `load_stock_list()` を code で left マージ
 2. sector フィルタ (st.selectbox)
-3. `st.dataframe` (total_score 降順、列: rank/code/名称/total_score/各軸)
+3. `st.dataframe` (total_score 降順、列: rank/**code/銘柄名**/date/total_score/各軸)
 4. CSV ダウンロードボタン
-5. 行クリック → Moat Score タブへ遷移 (st.session_state でコード引き継ぎ)
-6. Phase 4 追加: 冒頭に「今朝の Top10」ハイライト枠 (parquet の最新 date × top 10)
+5. 行クリック → **銘柄詳細ビューへ遷移** (`_navigate_to_detail()` 経由、`view="detail"` オーバーレイ)
+   - 技術的理由: `st.tabs` はプログラム的タブ切替不可 → 既存の `view="detail"` session_state パターンを採用
+   - ticker 未登録銘柄は警告表示してガード
+6. Phase 4 追加: 冒頭に「今朝の Top10」ハイライト枠 (parquet の最新 date × top 10 + **銘柄名列**)
 
 ### F-05: 外国人フロー タブ
 
@@ -340,7 +342,7 @@ Streamlit サイドバー選択
 ├── バックテスト (既存)
 ├── 最適化 (既存)
 ├── Moat Score ──→ [銘柄選択] ──→ レーダー + 軸説明
-├── ランキング ──→ [行クリック] ──→ Moat Score タブ
+├── ランキング ──→ [行クリック] ──→ 銘柄詳細ビュー (view="detail" オーバーレイ)
 ├── 外国人フロー
 ├── 政府政策 ──→ [テーマクリック] ──→ 関連銘柄一覧
 ├── 結論マインドマップ ──→ [保存ボタン] ──→ mindmap_and_mice/saved/
@@ -355,6 +357,8 @@ Streamlit サイドバー選択
 - [ ] 重み合計 `sum(WEIGHTS.values()) == 1.00` を assert で保証
 - [ ] naibu 停止時に `total_score = None` + `errors = ["naibu API unreachable"]` が返る
 - [ ] Streamlit Moat タブでレーダーチャートが表示される
-- [ ] ランキングタブで行クリック → Moat タブに銘柄コードが引き継がれる
+- [ ] ランキングタブで行クリック → 銘柄詳細ビューに遷移し「← 一覧に戻る」ボタンが表示される
+- [ ] ランキング表に銘柄名列が表示される (load_stock_list との left マージ)
+- [ ] 銘柄詳細ビューに「貸借対照表 (BS・最新期)」セクションが表示される (fetch_balance_sheet 経由)
 - [ ] Streamlit から `POST /api/moat-score/recompute` が呼ばれない (grep で確認)
 - [ ] mindmap の保存ボタンが permission prompt を出して承認後に `.mmd` が生成される

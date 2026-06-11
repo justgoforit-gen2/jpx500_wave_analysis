@@ -115,6 +115,23 @@ def _get_financials_cached(ticker: str) -> pd.DataFrame | None:
     return fetch_financials(ticker)
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def _get_bs_cached(code: str) -> dict | None:
+    from modules.naibu_client import fetch_balance_sheet
+
+    return fetch_balance_sheet(code)
+
+
+def _format_oku(yen: int | None) -> str:
+    """円単位の整数を億円/兆円表記に変換。None は '-' を返す。"""
+    if yen is None:
+        return "-"
+    oku = yen / 1e8
+    if abs(oku) >= 10000:
+        return f"{oku / 10000:.1f}兆円"
+    return f"{oku:,.0f}億円"
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_per_pbr_history() -> pd.DataFrame | None:
     """週次PER/PBR履歴 parquet をロード（存在しなければ None）"""
@@ -2559,6 +2576,89 @@ def show_detail_view():
     else:
         st.caption("財務データを取得できませんでした。")
 
+    # === 貸借対照表 (BS) ===
+    st.markdown("---")
+    st.markdown("#### 貸借対照表 (BS・最新期)")
+    bs = _get_bs_cached(code)
+    if bs and bs.get("total_assets"):
+        ta = bs.get("total_assets")
+        te = bs.get("total_equity")
+        tl = bs.get("total_liabilities")
+        cash = bs.get("cash")
+        sd = bs.get("short_term_debt") or 0
+        ld = bs.get("long_term_debt") or 0
+        int_debt = sd + ld
+        eq_ratio = (te / ta * 100) if ta and te else None
+        fy_label = f"FY{bs.get('fiscal_year', '')}（{'連結' if bs.get('is_consolidated') else '単独'}）"
+        st.caption(fy_label)
+
+        # (a) 指標カード
+        bc1, bc2, bc3 = st.columns(3)
+        bc4, bc5, bc6 = st.columns(3)
+        bc1.metric("総資産", _format_oku(ta))
+        bc2.metric("純資産", _format_oku(te))
+        bc3.metric("総負債", _format_oku(tl))
+        bc4.metric("自己資本比率", f"{eq_ratio:.1f}%" if eq_ratio is not None else "-")
+        bc5.metric("現金・預金", _format_oku(cash))
+        bc6.metric("有利子負債", _format_oku(int_debt) if int_debt else "-")
+
+        # (b) 構成グラフ (資産 vs 負債+純資産 の積み上げ横棒)
+        import plotly.graph_objects as go
+
+        ca = bs.get("current_assets") or 0
+        fa = max((ta or 0) - ca, 0)
+        cl = bs.get("current_liabilities") or 0
+        fl = max((tl or 0) - cl, 0)
+        eq = te or 0
+
+        fig_bs = go.Figure()
+        fig_bs.add_trace(go.Bar(
+            name="流動資産", x=[ca / 1e8], y=["資産"], orientation="h",
+            marker_color="#4C9BE8", text=[_format_oku(ca)], textposition="inside",
+        ))
+        fig_bs.add_trace(go.Bar(
+            name="固定資産", x=[fa / 1e8], y=["資産"], orientation="h",
+            marker_color="#2166AC", text=[_format_oku(fa)], textposition="inside",
+        ))
+        fig_bs.add_trace(go.Bar(
+            name="流動負債", x=[cl / 1e8], y=["負債・純資産"], orientation="h",
+            marker_color="#F4A460", text=[_format_oku(cl)], textposition="inside",
+        ))
+        fig_bs.add_trace(go.Bar(
+            name="固定負債", x=[fl / 1e8], y=["負債・純資産"], orientation="h",
+            marker_color="#D2691E", text=[_format_oku(fl)], textposition="inside",
+        ))
+        fig_bs.add_trace(go.Bar(
+            name="純資産", x=[eq / 1e8], y=["負債・純資産"], orientation="h",
+            marker_color="#5AAF5A", text=[_format_oku(eq)], textposition="inside",
+        ))
+        fig_bs.update_layout(
+            barmode="stack", height=160,
+            margin=dict(l=80, r=20, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            xaxis_title="億円",
+        )
+        st.plotly_chart(fig_bs, use_container_width=True)
+
+        # (c) 明細表
+        bs_rows = [
+            ("流動資産", bs.get("current_assets")),
+            ("総資産", ta),
+            ("現金・預金", cash),
+            ("流動負債", bs.get("current_liabilities")),
+            ("総負債", tl),
+            ("短期有利子負債", bs.get("short_term_debt")),
+            ("長期有利子負債", bs.get("long_term_debt")),
+            ("純資産（自己資本）", te),
+            ("資本金", bs.get("capital_stock")),
+            ("利益剰余金", bs.get("retained_earnings_bs")),
+        ]
+        bs_df = pd.DataFrame(bs_rows, columns=["科目", "金額（億円）"])
+        bs_df["金額（億円）"] = bs_df["金額（億円）"].apply(_format_oku)
+        st.dataframe(bs_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("この銘柄の BS データは naibu DB にありません。")
+
     # === 信用取引残高 ===
     st.markdown("---")
     st.markdown("#### 信用取引残高 (JPX公表)")
@@ -4534,6 +4634,35 @@ def _tab_moat_ranking() -> None:
     """ランキングタブ: parquet から上位銘柄一覧 + 今朝の Top10 + 決算予定。"""
     st.header("Moat Score ランキング")
 
+    with st.expander("評価軸の説明 ▸ 7軸・ウェイト・算出ロジック", expanded=False):
+        st.markdown(
+            """
+**Moat Score** は「バフェット流・経済的堀」を 7 軸 × 0〜10 点で定量化し、
+加重平均した **総合スコア（0〜10）** で銘柄を比較するスコアリングです。
+
+| 軸 | 列名 | ウェイト | 算出ソース |
+|---|---|:---:|---|
+| テクニカル | `axis_technical` | **10%** | 波形タイプ（上昇トレンド=7.5 / ブレイク=8.5 など） |
+| 財務（資本効率） | `axis_fundamental` | **25%** | CES スコア（ROE・ROIC・GP マージン等） |
+| 外国人フロー | `axis_foreign_flow` | **10%** | 直近4週累積フロー（naibu SQLite） |
+| 成長性 | `axis_growth` | **15%** | 多年度純利益成長率（naibu SQLite） |
+| セクター成長 | `axis_growth_sector` | **10%** | 政策シグナル × 業種タグ合致強度 |
+| Pricing Power | `axis_moat_pp` | **20%** | 価格転嫁力スコア（naibu API /pricing-power） |
+| 政策感応度 | `axis_policy` | **10%** | 政策シグナル strength × 業種タグ |
+
+**合計スコア式:**
+
+```
+total_score = technical×0.10 + fundamental×0.25 + foreign_flow×0.10
+            + growth×0.15   + growth_sector×0.10 + moat_pp×0.20
+            + policy×0.10
+```
+
+> **注意:** naibu API（Pricing Power）が停止中の場合、`axis_moat_pp` と `total_score` は `null` になります。
+> naibu API が起動していることを確認してください（ポート 8000）。
+"""
+        )
+
     from modules.moat_score import load_moat_scores
 
     df = load_moat_scores()
@@ -4543,6 +4672,14 @@ def _tab_moat_ranking() -> None:
             "`python batch/update.py` を実行するか、API `POST /api/moat-score/recompute` で生成してください。"
         )
         return
+
+    # 銘柄名・ticker を stock list からマージ
+    from modules.data_fetcher import load_stock_list
+
+    meta = load_stock_list()[["code", "name", "ticker"]].copy()
+    meta["code"] = meta["code"].astype(str)
+    df["code"] = df["code"].astype(str)
+    df = df.merge(meta, on="code", how="left")
 
     # ── 今朝の Top10 ハイライト枠 ────────────────────────────────────────────
     st.subheader("今朝の Top10")
@@ -4560,6 +4697,7 @@ def _tab_moat_ranking() -> None:
                 for c in [
                     "rank",
                     "code",
+                    "name",
                     "total_score",
                     "axis_moat_pp",
                     "axis_fundamental",
@@ -4570,10 +4708,9 @@ def _tab_moat_ranking() -> None:
                 top10[top10_cols].reset_index(drop=True),
                 use_container_width=True,
                 height=200,
+                column_config={"code": "コード", "name": "銘柄名"},
             )
-            st.caption(
-                "コードをコピーして「Moat Score」タブに貼り付けると詳細を確認できます。"
-            )
+            st.caption("行をクリックすると銘柄詳細が開きます。")
 
     st.divider()
 
@@ -4611,6 +4748,7 @@ def _tab_moat_ranking() -> None:
         for c in [
             "rank",
             "code",
+            "name",
             "date",
             "total_score",
             "axis_technical",
@@ -4621,7 +4759,25 @@ def _tab_moat_ranking() -> None:
         ]
         if c in display_df.columns
     ]
-    st.dataframe(display_df[show_cols], use_container_width=True)
+    rank_event = st.dataframe(
+        display_df[show_cols],
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="moat_rank_table",
+        column_config={"code": "コード", "name": "銘柄名"},
+    )
+    if rank_event and rank_event.selection and rank_event.selection.rows:
+        r = display_df.iloc[rank_event.selection.rows[0]]
+        ticker_val = r.get("ticker") if hasattr(r, "get") else r["ticker"] if "ticker" in r.index else None
+        if ticker_val and pd.notna(ticker_val):
+            _navigate_to_detail(
+                str(r["code"]),
+                str(r.get("name", "") if pd.notna(r.get("name", "")) else ""),
+                str(ticker_val),
+            )
+        else:
+            st.warning(f"銘柄 {r['code']} は詳細表示に未対応です（ticker 未登録）。")
 
     csv_data = display_df.to_csv(index=False, encoding="utf-8-sig")
     st.download_button(

@@ -201,8 +201,11 @@ def _compute_sector_and_policy(
 
 
 def _compute_pp_from_naibu(code: str) -> float | None:
-    edinet_code5 = to_edinet_securities_code(code)
-    url = f"{NAIBU_API_BASE_URL}/api/pricing-power/companies/{edinet_code5}"
+    # /api/stocks/{securities_code} は jpx500 の5桁 securities_code をそのまま受け付け、
+    # scores.pricing_power (0-1) を返す。pricing-power/companies/{edinet} は EDINET コード
+    # 必須かつ pricing_power がネストされるため使わない。
+    securities_code = to_edinet_securities_code(code)
+    url = f"{NAIBU_API_BASE_URL}/api/stocks/{securities_code}"
     try:
         with httpx.Client(timeout=NAIBU_FETCH_TIMEOUT_SEC) as client:
             r = client.get(url)
@@ -210,7 +213,7 @@ def _compute_pp_from_naibu(code: str) -> float | None:
                 return None
             r.raise_for_status()
             data = r.json()
-            pp = data.get("pricing_power")
+            pp = (data.get("scores") or {}).get("pricing_power")
             if pp is None:
                 return None
             return float(min(max(float(pp) * 10.0, 0.0), 10.0))

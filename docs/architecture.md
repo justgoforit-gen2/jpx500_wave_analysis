@@ -125,6 +125,12 @@ daily_update.bat (18:00)
 
 naibu コード形式: 5桁 EDINET (`{code}0`)。変換は naibu 側で実施。
 
+**銘柄詳細 BS (直読み)**:  
+銘柄詳細ビューの貸借対照表は naibu FastAPI を経由せず `modules/naibu_client.fetch_balance_sheet()` が  
+SQLite `financial_metrics` を **read-only URI** で直接参照する。  
+naibu API が `financial_metrics` の BS フィールドを公開していないためこの方式を採用。  
+既存の `fetch_jpx500_naibu_data()` と同じ `_connect()` 読み取り専用パターンを踏襲し、書込みは行わない。
+
 ### 4.2 MCP ↔ FastAPI (薄ラッパ原則)
 
 ```python

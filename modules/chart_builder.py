@@ -1,4 +1,4 @@
-"""Plotlyで3段チャートを生成する（メイン+売買代金+RSI）"""
+"""Plotlyで3段または4段チャートを生成する（メイン+売買代金+RSI[+信用倍率]）"""
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,6 +8,8 @@ from config.settings import (
     BB_PERIOD,
     BB_STD,
     MA_PERIODS,
+    MARGIN_RATIO_HIGH,
+    MARGIN_RATIO_LOW,
     RSI_PERIOD,
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
@@ -44,15 +46,36 @@ def build_chart(
     show_bb: bool = False,
     earnings_dates: list | None = None,
     overlays: list[dict] | None = None,
+    margin_history: pd.DataFrame | None = None,
 ) -> go.Figure:
-    """3段チャート（メイン+売買代金+RSI）を生成"""
+    """3段または4段チャート（メイン+売買代金+RSI[+信用倍率]）を生成
+
+    Args:
+        margin_history: observation_date, margin_ratio (+ source) を持つDataFrame。
+            指定時は4段目に信用倍率の時系列を追加する。空/None時は3段で描画。
+    """
+
+    has_margin = (
+        margin_history is not None
+        and len(margin_history) >= 1
+        and "margin_ratio" in margin_history.columns
+    )
+
+    if has_margin:
+        rows = 4
+        row_heights = [0.50, 0.16, 0.17, 0.17]
+        chart_height = 880
+    else:
+        rows = 3
+        row_heights = [0.6, 0.2, 0.2]
+        chart_height = 750
 
     fig = make_subplots(
-        rows=3,
+        rows=rows,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_heights=[0.6, 0.2, 0.2],
+        row_heights=row_heights,
         subplot_titles=None,
     )
 
@@ -310,10 +333,69 @@ def build_chart(
     )
     fig.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.3, row=3, col=1)
 
+    # === 4段目: 信用倍率 (margin_history が渡された場合のみ) ===
+    if has_margin:
+        m = margin_history.copy()
+        m["observation_date"] = pd.to_datetime(m["observation_date"])
+        m = m.sort_values("observation_date")
+
+        # 9999 (売残=0の上限値) は表示用に NaN にして線を切る
+        m["margin_ratio_display"] = m["margin_ratio"].where(
+            m["margin_ratio"] < 9999, other=None
+        )
+
+        # データソース別に色分け表示 (日次=青, 週次=橙, 株探長期=灰)
+        sources = m["source"].unique() if "source" in m.columns else ["unknown"]
+        source_styles = {
+            "daily": {"color": "#1976D2", "name": "信用倍率(日次)"},
+            "weekly": {"color": "#FF6F00", "name": "信用倍率(週次)"},
+            "kabutan": {"color": "#8E8E8E", "name": "信用倍率(長期)"},
+            "unknown": {"color": "#7B1FA2", "name": "信用倍率"},
+        }
+        for src in sources:
+            sub = m if "source" not in m.columns else m[m["source"] == src]
+            style = source_styles.get(src, source_styles["unknown"])
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["observation_date"],
+                    y=sub["margin_ratio_display"],
+                    mode="lines+markers",
+                    name=style["name"],
+                    line=dict(color=style["color"], width=1.8),
+                    marker=dict(size=5),
+                ),
+                row=4,
+                col=1,
+            )
+
+        # 閾値ライン
+        fig.add_hline(
+            y=MARGIN_RATIO_HIGH,
+            line_dash="dash",
+            line_color="red",
+            opacity=0.5,
+            row=4,
+            col=1,
+            annotation_text=f"買偏重({MARGIN_RATIO_HIGH})",
+            annotation_position="right",
+            annotation_font_size=10,
+        )
+        fig.add_hline(
+            y=MARGIN_RATIO_LOW,
+            line_dash="dash",
+            line_color="blue",
+            opacity=0.5,
+            row=4,
+            col=1,
+            annotation_text=f"売偏重({MARGIN_RATIO_LOW})",
+            annotation_position="right",
+            annotation_font_size=10,
+        )
+
     # === レイアウト ===
     fig.update_layout(
         title=f"{ticker} {name}",
-        height=750,
+        height=chart_height,
         margin=dict(l=10, r=10, t=40, b=10),
         xaxis_rangeslider_visible=False,
         showlegend=True,
@@ -331,7 +413,11 @@ def build_chart(
     fig.update_yaxes(title_text="価格", row=1, col=1)
     fig.update_yaxes(title_text="売買代金", row=2, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1)
-    fig.update_xaxes(title_text="日付", row=3, col=1)
+    if has_margin:
+        fig.update_yaxes(title_text="信用倍率", row=4, col=1)
+        fig.update_xaxes(title_text="日付", row=4, col=1)
+    else:
+        fig.update_xaxes(title_text="日付", row=3, col=1)
 
     # レスポンシブ
     fig.update_layout(autosize=True)

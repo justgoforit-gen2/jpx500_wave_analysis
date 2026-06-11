@@ -348,14 +348,35 @@ def get_global_index(ticker: str) -> pd.DataFrame | None:
 def fetch_financials(ticker: str) -> pd.DataFrame | None:
     """過去3年+予測の売上高・営業利益率・EPSを取得する
 
+    優先順位:
+        1. 株探(kabutan.jp/stock/finance) — 日本企業の最新年度実績を確実に拾える
+        2. yfinance — 株探で取れなかった場合のフォールバック (海外株/データなし時)
+
+    yfinanceは日本企業の年次データ反映に数ヶ月の遅延があるため、原則として
+    株探を優先する。
+
     Returns:
         DataFrame with columns: period, revenue, op_margin, eps, is_forecast
-        - period: 表示用文字列 (例: "2023年3月期")
+        - period: 表示用文字列 (例: "2026年3月期")
         - revenue: 売上高（億円）
         - op_margin: 営業利益率（%）
         - eps: 1株当たり利益（円/USD等、原通貨）。実績=Diluted EPS、予測=アナリストavg
         - is_forecast: 予測かどうか
+        - announce_date: 決算発表日 (株探からの場合のみ。yfinance経路では欠損)
     """
+    # === 優先1: 株探から取得 (日本株のみ) ===
+    if ticker.endswith(".T"):
+        try:
+            from modules.kabutan_financials_fetcher import fetch_kabutan_financials
+
+            kab = fetch_kabutan_financials(ticker)
+            if kab is not None and len(kab) > 0:
+                return kab
+            logger.info(f"{ticker}: 株探から取得できず、yfinanceにフォールバック")
+        except Exception as e:
+            logger.warning(f"{ticker}: 株探取得エラー、yfinanceへフォールバック: {e}")
+
+    # === 優先2: yfinance ===
     try:
         t = yf.Ticker(ticker)
         stmt = t.income_stmt  # columns=日付(降順), rows=項目

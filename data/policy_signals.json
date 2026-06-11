@@ -1,0 +1,46 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-06-09",
+  "signals": [
+    {
+      "policy_id": "GX-2026",
+      "theme": "グリーン・トランスフォーメーション (GX)",
+      "sector_tags": ["電力", "エネルギー", "自動車", "鉄鋼", "化学"],
+      "strength": 3,
+      "valid_until": "2027-03-31",
+      "updated_at": "2026-06-09"
+    },
+    {
+      "policy_id": "DX-2026",
+      "theme": "デジタル・トランスフォーメーション (DX)",
+      "sector_tags": ["情報通信", "電子部品", "システム"],
+      "strength": 3,
+      "valid_until": "2027-03-31",
+      "updated_at": "2026-06-09"
+    },
+    {
+      "policy_id": "DEF-2026",
+      "theme": "防衛・安全保障強化",
+      "sector_tags": ["防衛", "航空", "電子機器", "造船"],
+      "strength": 3,
+      "valid_until": "2030-03-31",
+      "updated_at": "2026-06-09"
+    },
+    {
+      "policy_id": "CHILD-2026",
+      "theme": "少子化対策・子育て支援",
+      "sector_tags": ["教育", "医療", "住宅", "流通"],
+      "strength": 2,
+      "valid_until": "2027-03-31",
+      "updated_at": "2026-06-09"
+    },
+    {
+      "policy_id": "INFRA-2026",
+      "theme": "インフラ老朽化対策・国土強靭化",
+      "sector_tags": ["建設", "セメント", "鉄鋼", "機械"],
+      "strength": 2,
+      "valid_until": "2030-03-31",
+      "updated_at": "2026-06-09"
+    }
+  ]
+}

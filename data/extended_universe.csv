@@ -1,0 +1,20 @@
+ticker,name,category,currency,role
+VOO,Vanguard S&P 500 ETF,core,USD,米国株インデックス
+QQQ,Invesco QQQ NASDAQ100,core,USD,米国成長株
+SOXX,iShares Semiconductor ETF,core,USD,米国半導体ETF
+VT,Vanguard Total World Stock ETF,core,USD,全世界株
+VNQ,Vanguard Real Estate ETF,core,USD,米国REIT
+TLT,iShares 20+ Year Treasury Bond ETF,core,USD,米国長期国債
+AGG,iShares Core US Aggregate Bond ETF,core,USD,米国総合債券
+GLD,SPDR Gold Shares,core,USD,金
+1343.T,NEXT FUNDS 東証REIT指数,core,JPY,日本REIT
+1545.T,NEXT FUNDS NASDAQ100,core,JPY,NASDAQ100連動(円)
+1655.T,iShares S&P 500 (JPY),core,JPY,S&P500連動(円)
+1489.T,NEXT FUNDS 日経平均高配当株50指数,core,JPY,日本高配当
+NVDA,NVIDIA Corporation,satellite,USD,AI半導体本丸
+MSFT,Microsoft Corporation,satellite,USD,クラウドxAI
+GOOGL,Alphabet Inc.,satellite,USD,検索xAI
+TSM,Taiwan Semiconductor ADR,satellite,USD,半導体ファウンドリ
+AVGO,Broadcom Inc.,satellite,USD,AI半導体カスタム
+META,Meta Platforms,satellite,USD,SNSxAI
+AMZN,Amazon.com,satellite,USD,EC+クラウド

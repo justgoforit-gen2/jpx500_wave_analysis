@@ -1,0 +1,23 @@
+code,name,ticker,category,target_weight_pct,target_jpy
+VOO,Vanguard S&P 500,VOO,core,7.0,2100000
+QQQ,Invesco QQQ NASDAQ100,QQQ,core,8.0,2400000
+SOXX,iShares Semiconductor,SOXX,core,5.0,1500000
+VT,Vanguard Total World,VT,core,8.0,2400000
+1343,NEXT FUNDS 東証REIT指数,1343.T,core,7.0,2100000
+VNQ,Vanguard Real Estate,VNQ,core,5.0,1500000
+TLT,iShares 20+ Treasury,TLT,core,8.0,2400000
+AGG,iShares Core US Aggregate Bond,AGG,core,6.0,1800000
+GLD,SPDR Gold,GLD,core,5.0,1500000
+1489,NEXT FUNDS 日経高配当株50,1489.T,core,6.0,1800000
+CASH,キャッシュ(押し目用),CASH,cash,5.0,1500000
+7011,三菱重工業,7011.T,satellite,4.0,1200000
+4063,信越化学工業,4063.T,satellite,4.0,1200000
+8035,東京エレクトロン,8035.T,satellite,3.0,900000
+6594,ニデック,6594.T,satellite,3.0,900000
+8316,三井住友フィナンシャルグループ,8316.T,satellite,3.0,900000
+8377,ほくほくフィナンシャルグループ,8377.T,satellite,2.0,600000
+1801,大成建設,1801.T,satellite,2.0,600000
+6855,日本電子材料,6855.T,satellite,2.0,600000
+NVDA,NVIDIA,NVDA,satellite,3.0,900000
+MSFT,Microsoft,MSFT,satellite,2.0,600000
+6981,村田製作所,6981.T,satellite,2.0,600000

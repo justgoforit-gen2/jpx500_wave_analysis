@@ -244,3 +244,64 @@ def fetch_universe_naibu_data(
     ] + fields
     other = [c for c in base_df.columns if c not in cols_order]
     return base_df[cols_order + other].reset_index(drop=True)
+
+
+_BS_FIELDS = [
+    "current_assets",
+    "total_assets",
+    "current_liabilities",
+    "total_liabilities",
+    "total_equity",
+    "cash",
+    "short_term_debt",
+    "long_term_debt",
+    "retained_earnings_bs",
+    "capital_stock",
+]
+
+
+def fetch_balance_sheet(jpx_code: str) -> dict | None:
+    """4桁コードの最新本決算期 BS 項目を 1 件の dict で返す。
+
+    financial_metrics テーブルから total_assets が NULL でない最新
+    fiscal_year_end を採用する。DB 不在・該当なしは None を返す。
+    """
+    if not naibu_db_exists():
+        logger.warning(f"naibu DB not found at {NAIBU_DB_PATH}")
+        return None
+
+    sec5 = to_edinet_securities_code(jpx_code)
+    fields_sql = ", ".join(f"fm.{f}" for f in _BS_FIELDS)
+
+    # _BS_FIELDS は内部固定ホワイトリスト (ユーザー入力なし)  # nosec B608
+    query = f"""
+        SELECT
+            fm.fiscal_year,
+            fm.fiscal_year_end,
+            fm.is_consolidated,
+            {fields_sql}
+        FROM financial_metrics fm
+        JOIN companies co ON co.edinet_code = fm.edinet_code
+        WHERE co.securities_code = ?
+          AND fm.total_assets IS NOT NULL
+        ORDER BY fm.fiscal_year_end DESC
+        LIMIT 1
+    """  # nosec B608
+    try:
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(query, (sec5,)).fetchone()
+        if row is None:
+            return None
+        result: dict = {
+            "fiscal_year": row["fiscal_year"],
+            "fiscal_year_end": str(row["fiscal_year_end"]),
+            "is_consolidated": bool(row["is_consolidated"]),
+        }
+        for f in _BS_FIELDS:
+            val = row[f]
+            result[f] = int(val) if val is not None else None
+        return result
+    except Exception as e:
+        logger.warning(f"fetch_balance_sheet({jpx_code}): {e}")
+        return None

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -29,6 +30,12 @@ from config.settings import (
     JPX_MARGIN_HISTORY_PARQUET,
     JPX_MARGIN_LATEST_PARQUET,
     JPX_MARGIN_LOOKBACK_DAYS,
+    JPX_MARGIN_WEEKLY_CACHE_DIR,
+    JPX_MARGIN_WEEKLY_FILE_URL_TEMPLATE,
+    JPX_MARGIN_WEEKLY_HISTORY_PARQUET,
+    JPX_MARGIN_WEEKLY_LATEST_PARQUET,
+    JPX_MARGIN_WEEKLY_LOOKBACK_WEEKS,
+    JPX_MARGIN_WEEKLY_PAGE_URL,
 )
 
 logger = logging.getLogger(__name__)
@@ -385,3 +392,420 @@ def attach_margin_metrics(
 
     out = out.drop(columns=["buy_balance"])
     return out
+
+
+# =============================================================================
+# 週次 PDF (syumatsu) パイプライン
+# -----------------------------------------------------------------------------
+# 「銘柄別信用取引週末残高(申込日付)」は全プライム銘柄を対象とした週次データ。
+# 日々公表銘柄に乗らない優良大型株 (SBG等) はこちらでしか追えない。
+# JPXはPDF形式でしか公開していないため、pypdfでテキスト抽出してパースする。
+# =============================================================================
+
+
+_WEEKLY_HEADER_LETTERS = ("B",)
+_WEEKLY_ISIN_PATTERN = re.compile(r"\b(JP[0-9A-Z]{10})\b")
+_WEEKLY_CODE_PATTERN = re.compile(r"\b([0-9][0-9A-Z][0-9A-Z][0-9A-Z]0)\b")
+
+
+def _build_weekly_url(observation_date: date) -> str:
+    return JPX_MARGIN_WEEKLY_FILE_URL_TEMPLATE.format(
+        date=observation_date.strftime("%Y%m%d")
+    )
+
+
+def _weekly_cache_path(observation_date: date) -> Path:
+    return (
+        JPX_MARGIN_WEEKLY_CACHE_DIR
+        / f"syumatsu{observation_date.strftime('%Y%m%d')}00.pdf"
+    )
+
+
+def fetch_weekly_pdf(observation_date: date) -> bytes | None:
+    """指定週末日(=金曜)のPDFをJPXから取得。未公表日はNone。"""
+    cache = _weekly_cache_path(observation_date)
+    if cache.exists():
+        return cache.read_bytes()
+
+    url = _build_weekly_url(observation_date)
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": _USER_AGENT},
+            timeout=JPX_FETCH_TIMEOUT_SEC,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        JPX_MARGIN_WEEKLY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(resp.content)
+        time.sleep(JPX_FETCH_SLEEP_SEC)
+        return resp.content
+    except requests.HTTPError as e:
+        if getattr(e.response, "status_code", None) == 404:
+            return None
+        logger.warning(f"週次PDF取得失敗 {observation_date}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"週次PDF取得失敗 {observation_date}: {e}")
+        return None
+
+
+def discover_weekly_dates(max_weeks: int = 12) -> list[date]:
+    """JPXの公表ページ(/margin/05.html)から実際に公開されている週末日付一覧を取得。
+
+    ファイル名 syumatsu{YYYYMMDD}00.pdf の日付部分を抽出し、新しい順に最大 max_weeks 件返す。
+    """
+    try:
+        resp = requests.get(
+            JPX_MARGIN_WEEKLY_PAGE_URL,
+            headers={"User-Agent": _USER_AGENT},
+            timeout=JPX_FETCH_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"週次インデックスページ取得失敗: {e}")
+        return []
+
+    dates: list[date] = []
+    seen: set[date] = set()
+    for m in re.finditer(r"syumatsu(\d{8})00\.pdf", resp.text):
+        try:
+            d = date(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:8]))
+            if d not in seen:
+                seen.add(d)
+                dates.append(d)
+        except ValueError:
+            continue
+    dates.sort(reverse=True)
+    return dates[:max_weeks]
+
+
+def _normalize_weekly_numbers(num_text: str) -> list[int] | None:
+    """PDF抽出した数値列文字列を12個のintにパースする。
+
+    PDFテキスト抽出は不安定で、JPX週次PDFでは以下のパターンが混在する:
+        パターンA: "1, 974,100" → カンマ前後に空白挿入 (1,974,100)
+        パターンB: "▲  1,231,100" → ▲ と数字の間に複数空白
+        パターンC: "▲ 2 31,300" → 桁内に空白挿入 (-231,300)
+        パターンD: "18,578,6 00" → 千の位カンマ直後に空白 (18,578,600)
+
+    アルゴリズム:
+        1. ▲ + 連続空白 を負号 "-" に置換 (パターンB対応)
+        2. 空白で分割
+        3. カンマ前後で隣接トークンをマージ (パターンA対応)
+        4. count > 12 の場合、「最後のカンマ区切りグループが3桁でない」トークンを
+           次のトークンとマージ (パターンC/D対応)
+    """
+    s = re.sub(r"▲\s*", "-", num_text)
+    tokens = s.split()
+
+    # パターンA対応: カンマ前後でマージ
+    merged: list[str] = []
+    for tok in tokens:
+        if merged and (tok.startswith(",") or merged[-1].endswith(",")):
+            merged[-1] = merged[-1] + tok
+        else:
+            merged.append(tok)
+
+    # パターンC/D対応: count制約を使って桁内空白を吸収
+    def _last_group_short(tok: str) -> bool:
+        """次トークンと結合すべき断片かを判定。
+
+        - カンマあり: 最後のグループが3桁でなければ True (例: "18,578,6")
+        - カンマなし: 2桁以下なら True (例: "-2")
+            注: 株数データは通常千以上の値で、2桁以下スタンドアロンは
+            PDF抽出時のフラグメント (例: "▲ 2 31,300" の '-2') と判断。
+            count > 12 の場合のみこのロジックは作動するので、
+            正常データ (12個ぴったり) には影響しない。
+        """
+        t = tok.lstrip("-")
+        if "," in t:
+            return len(t.rsplit(",", 1)[-1]) != 3
+        return len(t) < 3
+
+    # 安全ガード: 最大マージ回数は (初期count - 12) + 余裕
+    max_iter = max(0, len(merged) - 12) + 4
+    for _ in range(max_iter):
+        if len(merged) <= 12:
+            break
+        merged_any = False
+        for i in range(len(merged) - 1):
+            if _last_group_short(merged[i]):
+                merged[i : i + 2] = [merged[i] + merged[i + 1]]
+                merged_any = True
+                break
+        if not merged_any:
+            break
+
+    nums: list[int] = []
+    for tok in merged:
+        cleaned = tok.replace(",", "")
+        if cleaned in ("", "-"):
+            return None
+        try:
+            nums.append(int(cleaned))
+        except ValueError:
+            return None
+    if len(nums) != 12:
+        return None
+    return nums
+
+
+def _parse_weekly_row(line: str) -> dict | None:
+    """週次PDFの1行をパースして1銘柄分の dict を返す。
+
+    行フォーマット:
+        B {銘柄名} {code5} {ISIN} {12個の数値 ▲含む}
+    数値列の列定義 (左→右):
+        0: 売残高, 1: 売残 前週比,
+        2: 買残高, 3: 買残 前週比,
+        4: 一般信用 売 残, 5: 一般信用 売 前週比,
+        6: 制度信用 売 残, 7: 制度信用 売 前週比,
+        8: 一般信用 買 残, 9: 一般信用 買 前週比,
+        10: 制度信用 買 残, 11: 制度信用 買 前週比
+    """
+    line = line.strip()
+    if not line or len(line) < 30:
+        return None
+
+    isin_match = _WEEKLY_ISIN_PATTERN.search(line)
+    if not isin_match:
+        return None
+    isin = isin_match.group(1)
+
+    # ISIN直前の token が code5
+    before_isin = line[: isin_match.start()].rstrip()
+    code_match = _WEEKLY_CODE_PATTERN.search(before_isin[-10:])
+    if not code_match:
+        return None
+    code5 = code_match.group(1)
+
+    # 銘柄名 = 行頭1文字 (B等) を除いた、code5 より前のテキスト
+    name_section = before_isin[: -len(code5)].strip()
+    if name_section[:1] in _WEEKLY_HEADER_LETTERS:
+        name_section = name_section[1:].strip()
+    # "普通株式" suffix を残しておく (元データに準拠)
+    name = name_section
+
+    num_section = line[isin_match.end() :]
+    nums = _normalize_weekly_numbers(num_section)
+    if nums is None:
+        return None
+
+    sell_balance, sell_change = nums[0], nums[1]
+    buy_balance, buy_change = nums[2], nums[3]
+
+    if sell_balance > 0:
+        margin_ratio = min(buy_balance / sell_balance, 9999.0)
+    else:
+        margin_ratio = 9999.0 if buy_balance > 0 else 0.0
+
+    return {
+        "code5": code5,
+        "isin": isin,
+        "name": name,
+        "sell_balance": sell_balance,
+        "sell_change": sell_change,
+        "buy_balance": buy_balance,
+        "buy_change": buy_change,
+        "negotiable_sell_balance": nums[4],
+        "negotiable_sell_change": nums[5],
+        "standardized_sell_balance": nums[6],
+        "standardized_sell_change": nums[7],
+        "negotiable_buy_balance": nums[8],
+        "negotiable_buy_change": nums[9],
+        "standardized_buy_balance": nums[10],
+        "standardized_buy_change": nums[11],
+        "margin_ratio": margin_ratio,
+    }
+
+
+def parse_weekly_pdf(content: bytes, observation_date: date) -> pd.DataFrame:
+    """週次PDFをパースして DataFrame を返す。
+
+    pypdf でテキスト抽出 → 行単位でレギュレックスベースのパース。
+    パース不能行は警告ログを出さずスキップ (見出し行・空行を含むため)。
+    """
+    import pypdf
+
+    reader = pypdf.PdfReader(io.BytesIO(content))
+    rows: list[dict] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        for raw_line in text.split("\n"):
+            parsed = _parse_weekly_row(raw_line)
+            if parsed is not None:
+                parsed["observation_date"] = observation_date
+                rows.append(parsed)
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["code4"] = df["code5"].str[:4]
+    df["ticker"] = df["code4"] + ".T"
+    # 同じ銘柄が複数ページにまたがって重複することは無いはずだが念のため
+    df = df.drop_duplicates(subset=["code5"], keep="first").reset_index(drop=True)
+    df["observation_date"] = pd.to_datetime(df["observation_date"]).dt.date
+    return df
+
+
+def fetch_weekly_range(
+    max_weeks: int = JPX_MARGIN_WEEKLY_LOOKBACK_WEEKS,
+    sleep_sec: float = JPX_FETCH_SLEEP_SEC,
+) -> pd.DataFrame:
+    """直近 max_weeks 週分の週次データをまとめて取得。
+
+    JPXの公表ページから実際に存在するファイルだけを取りに行く (祝日・GW対応)。
+    """
+    dates = discover_weekly_dates(max_weeks=max_weeks)
+    if not dates:
+        logger.warning("週次データの公開日付が取得できませんでした")
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    success = 0
+    for d in dates:
+        content = fetch_weekly_pdf(d)
+        if content is None:
+            continue
+        try:
+            parsed = parse_weekly_pdf(content, d)
+            if len(parsed) > 0:
+                frames.append(parsed)
+                success += 1
+                logger.info(f"週次パース成功 {d}: {len(parsed):,}銘柄")
+        except Exception as e:
+            logger.warning(f"週次パース失敗 {d}: {e}")
+        time.sleep(sleep_sec)
+
+    logger.info(f"週次データ取得: 成功={success}週")
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def update_margin_weekly_history(
+    max_weeks: int = JPX_MARGIN_WEEKLY_LOOKBACK_WEEKS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """週次データを取得して history / latest parquet を更新する。"""
+    new_data = fetch_weekly_range(max_weeks=max_weeks)
+    if new_data.empty:
+        logger.warning("週次信用残データが取得できませんでした")
+        return pd.DataFrame(), pd.DataFrame()
+
+    if JPX_MARGIN_WEEKLY_HISTORY_PARQUET.exists():
+        existing = pd.read_parquet(JPX_MARGIN_WEEKLY_HISTORY_PARQUET)
+        merged = pd.concat([existing, new_data], ignore_index=True)
+        merged = merged.drop_duplicates(
+            subset=["observation_date", "ticker"], keep="last"
+        )
+    else:
+        merged = new_data
+
+    merged = merged.sort_values(["ticker", "observation_date"]).reset_index(drop=True)
+    merged.to_parquet(JPX_MARGIN_WEEKLY_HISTORY_PARQUET, index=False)
+
+    latest = (
+        merged.sort_values("observation_date")
+        .groupby("ticker", as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
+    latest.to_parquet(JPX_MARGIN_WEEKLY_LATEST_PARQUET, index=False)
+
+    logger.info(f"週次信用残履歴更新: 累積{len(merged):,}行, 最新{len(latest):,}銘柄")
+    return merged, latest
+
+
+def load_margin_weekly_latest() -> pd.DataFrame | None:
+    """週次データの最新スナップショット (全プライム銘柄カバー) を読み込む。"""
+    if not JPX_MARGIN_WEEKLY_LATEST_PARQUET.exists():
+        return None
+    return pd.read_parquet(JPX_MARGIN_WEEKLY_LATEST_PARQUET)
+
+
+def load_margin_weekly_history(ticker: str | None = None) -> pd.DataFrame | None:
+    """週次データの履歴を読み込む。tickerを指定すれば該当銘柄のみ。"""
+    if not JPX_MARGIN_WEEKLY_HISTORY_PARQUET.exists():
+        return None
+    df = pd.read_parquet(JPX_MARGIN_WEEKLY_HISTORY_PARQUET)
+    if ticker is not None:
+        df = df[df["ticker"] == ticker].copy()
+    return df.sort_values("observation_date").reset_index(drop=True)
+
+
+def load_margin_history_combined(ticker: str) -> pd.DataFrame | None:
+    """3つのソース (日次/週次/株探) を統合した信用残履歴を返す。
+
+    優先順位 (同一観測日で重複した場合):
+        1. daily (mtdailyk) - 詳細項目あり
+        2. weekly (syumatsu) - JPX公式、直近5週
+        3. kabutan - 過去3年以上の長期履歴
+
+    Returns:
+        ticker, observation_date, sell_balance, buy_balance, margin_ratio, source
+        のカラムを持つDataFrame。すべて空なら None。
+    """
+    frames: list[pd.DataFrame] = []
+    base_cols = [
+        "observation_date",
+        "sell_balance",
+        "sell_change",
+        "buy_balance",
+        "buy_change",
+        "margin_ratio",
+    ]
+
+    daily = load_margin_history(ticker)
+    if daily is not None and len(daily) > 0:
+        cols = [
+            c
+            for c in base_cols + ["buy_pct_listed", "sell_pct_listed"]
+            if c in daily.columns
+        ]
+        d = daily[cols].copy()
+        d["source"] = "daily"
+        frames.append(d)
+
+    weekly = load_margin_weekly_history(ticker)
+    if weekly is not None and len(weekly) > 0:
+        cols = [c for c in base_cols if c in weekly.columns]
+        w = weekly[cols].copy()
+        w["source"] = "weekly"
+        w["buy_pct_listed"] = pd.NA
+        w["sell_pct_listed"] = pd.NA
+        frames.append(w)
+
+    # 株探履歴 (長期バックフィル)
+    try:
+        from modules.kabutan_margin_fetcher import load_kabutan_history
+
+        kab = load_kabutan_history(ticker)
+        if kab is not None and len(kab) > 0:
+            k = kab[
+                ["observation_date", "sell_balance", "buy_balance", "margin_ratio"]
+            ].copy()
+            k["sell_change"] = pd.NA
+            k["buy_change"] = pd.NA
+            k["buy_pct_listed"] = pd.NA
+            k["sell_pct_listed"] = pd.NA
+            k["source"] = "kabutan"
+            frames.append(k)
+    except ImportError:
+        pass
+
+    if not frames:
+        return None
+
+    # source列の優先順位を数値化してソート → drop_duplicates で優先源を残す
+    source_priority = {"daily": 0, "weekly": 1, "kabutan": 2, "unknown": 9}
+    combined = pd.concat(frames, ignore_index=True)
+    combined["_priority"] = combined["source"].map(source_priority).fillna(9)
+    combined = combined.sort_values(["observation_date", "_priority"]).drop_duplicates(
+        subset=["observation_date"], keep="first"
+    )
+    combined = combined.drop(columns=["_priority"])
+    combined = combined.sort_values("observation_date").reset_index(drop=True)
+    return combined

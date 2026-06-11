@@ -1,5 +1,6 @@
 [server]
 headless = true
+port = 8501
 maxUploadSize = 200
 
 [client]
