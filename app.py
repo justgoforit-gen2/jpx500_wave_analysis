@@ -4878,6 +4878,262 @@ def _show_policy_freshness_indicator() -> None:
         pass
 
 
+def _build_mindmap_from_moat(code: str, result: dict) -> dict:
+    """MoatScore 7軸結果から MindMap JSON を構築する。"""
+    axes = [
+        ("technical",     "テクニカル"),
+        ("fundamental",   "ファンダ"),
+        ("foreign_flow",  "外国人フロー"),
+        ("growth",        "成長"),
+        ("growth_sector", "成長分野"),
+        ("moat_pp",       "PP"),
+        ("policy",        "政策"),
+    ]
+    total = result.get("total_score")
+    total_label = f"{total:.1f}" if total is not None else "N/A"
+    children = []
+    for key, label_ja in axes:
+        score_val = result.get(f"axis_{key}")
+        score_str = f"{score_val:.1f}" if score_val is not None else "N/A"
+        children.append({
+            "id": f"ax_{key}",
+            "label": f"{label_ja}: {score_str}",
+            "children": [],
+            "metadata": {"axis": key, "score": score_val},
+        })
+    return {
+        "title": f"{code} 投資結論マップ",
+        "root": {
+            "id": "root",
+            "label": f"{code} 総合:{total_label}",
+            "children": children,
+            "metadata": {},
+        },
+    }
+
+
+def _build_naibu_context(code: str) -> str:
+    """naibu-ryuho API から財務データを取得してコンテキスト文字列を返す。取得失敗時は空文字。"""
+    import httpx
+
+    try:
+        r = httpx.get(f"http://localhost:8000/api/stocks/{code}", timeout=5)
+        if r.status_code != 200:
+            return ""
+        d = r.json()
+    except Exception:
+        return ""
+
+    lines: list[str] = []
+    name = d.get("name", code)
+    sector = d.get("sector_33", "")
+    lines.append(f"■ 企業: {name} [{sector}]")
+
+    hist = d.get("financial_history", [])
+    if hist:
+        h = hist[0]
+        fy = h.get("fiscal_year", "")
+        rev = h.get("revenue") or 0
+        rev_str = f"{rev / 1e12:.2f}兆円" if rev >= 1e12 else f"{rev / 1e9:.0f}億円"
+        gm = h.get("gross_margin_pct")
+        om = h.get("op_margin_pct")
+        cash = h.get("cash") or 0
+        cash_str = f"{cash / 1e12:.2f}兆円" if cash >= 1e12 else f"{cash / 1e9:.0f}億円"
+        lines.append(f"■ FY{fy} 財務: 売上{rev_str}, 粗利率{gm:.1f}%, 営業利益率{om:.1f}%, 現金{cash_str}")
+
+        if len(hist) >= 2:
+            rev_prev = hist[1].get("revenue") or 0
+            if rev_prev > 0:
+                growth = (rev - rev_prev) / rev_prev * 100
+                lines.append(f"  売上前年比: {growth:+.1f}%")
+
+    wave = d.get("wave", {})
+    if wave:
+        wt = wave.get("wave_types", "")
+        hi = wave.get("range_high")
+        lo = wave.get("range_low")
+        latest = wave.get("price_latest")
+        if wt:
+            lines.append(f"■ 株価動向: {wt}")
+        if lo and hi:
+            lines.append(f"  価格レンジ: {lo:.0f}〜{hi:.0f}円" + (f", 直近: {latest:.0f}円" if latest else ""))
+
+    scores = d.get("scores", {})
+    if scores:
+        pp = scores.get("pricing_power")
+        comp = scores.get("composite")
+        if pp is not None:
+            lines.append(f"■ Pricing Power スコア: {pp:.2f} (1.0満点), 総合競争力: {comp:.2f}")
+
+    return "\n".join(lines)
+
+
+def _tab_asset_value() -> None:
+    """資産バリュータブ: EDINET 有報から含み損益を算出して表示。"""
+    from asset_value_tab import render_tab  # noqa: PLC0415
+    render_tab()
+
+
+def _tab_mindmap_conclusion() -> None:
+    """結論マインドマップタブ: MoatScore 7軸からデータ根拠付きマインドマップを生成。"""
+    import httpx
+    from streamlit_mermaid import st_mermaid
+
+    MINDMAP_BASE = "http://localhost:8003/api"
+
+    st.header("結論マインドマップ — バフェット 7軸 × マインドマップ")
+    st.caption(
+        "MoatScore 7軸スコアから投資結論を可視化します。"
+        " mindmap_and_mice (port 8003) が起動している必要があります。"
+    )
+
+    default_code = st.session_state.get("mindmap_code", "7203")
+    code_input = st.text_input("銘柄コード (4桁)", value=default_code, key="mindmap_code_input")
+
+    gen_clicked = st.button("マップ生成", key="mindmap_gen_btn")
+
+    if gen_clicked:
+        st.session_state["mindmap_code"] = code_input
+        code = code_input
+        with st.spinner(f"{code} の MoatScore を算出中..."):
+            try:
+                from modules.moat_score import MoatScoreEngine
+                engine = MoatScoreEngine()
+                result = engine.compute(code)
+            except Exception as e:
+                st.error(f"MoatScore 算出エラー: {e}")
+                return
+
+        mindmap_json = _build_mindmap_from_moat(code, result)
+
+        with st.spinner("財務データを取得中..."):
+            naibu_ctx = _build_naibu_context(code)
+            st.session_state["mindmap_naibu_context"] = naibu_ctx
+
+        with st.spinner("マインドマップに変換中..."):
+            try:
+                r = httpx.post(
+                    f"{MINDMAP_BASE}/to-mermaid",
+                    json={"mindmap": mindmap_json},
+                    timeout=10,
+                )
+                r.raise_for_status()
+                mermaid_str = r.json()["mermaid"]
+            except httpx.ConnectError:
+                st.error(
+                    "mindmap API (port 8003) に接続できません。"
+                    " `python mindmap_and_mice/main.py` で起動してください。"
+                )
+                return
+            except Exception as e:
+                st.error(f"Mermaid 変換エラー: {e}")
+                return
+
+        st.session_state["mindmap_json"] = mindmap_json
+        st.session_state["mindmap_mermaid"] = mermaid_str
+        st.session_state["mindmap_result"] = result
+        st.rerun()
+
+    code = st.session_state.get("mindmap_code", code_input)
+
+    if "mindmap_mermaid" in st.session_state:
+        st_mermaid(st.session_state["mindmap_mermaid"], height=500)
+
+        col_expand, col_save = st.columns([2, 2])
+        with col_expand:
+            expand_clicked = st.button("AI 深掘り", key="mindmap_expand_btn")
+        with col_save:
+            save_clicked = st.button("保存", key="mindmap_save_btn")
+
+        if expand_clicked:
+            result = st.session_state.get("mindmap_result", {})
+            axes_summary = ", ".join(
+                f"{k}={v:.1f}" if v is not None else f"{k}=N/A"
+                for k, v in {
+                    "technical": result.get("axis_technical"),
+                    "fundamental": result.get("axis_fundamental"),
+                    "foreign_flow": result.get("axis_foreign_flow"),
+                    "growth": result.get("axis_growth"),
+                    "growth_sector": result.get("axis_growth_sector"),
+                    "moat_pp": result.get("axis_moat_pp"),
+                    "policy": result.get("axis_policy"),
+                }.items()
+            )
+            naibu_ctx = st.session_state.get("mindmap_naibu_context", "")
+            context = (
+                f"{naibu_ctx}\n" if naibu_ctx else ""
+            ) + f"■ MoatScore軸スコア: {axes_summary}, 総合: {result.get('total_score')}"
+            with st.spinner("AI が追加分析を生成中..."):
+                try:
+                    r = httpx.post(
+                        f"{MINDMAP_BASE}/expand",
+                        json={"parent_label": code, "context": context},
+                        timeout=30,
+                    )
+                    r.raise_for_status()
+                    new_children = r.json().get("children", [])
+                except httpx.ConnectError:
+                    st.error("mindmap API (port 8003) に接続できません。")
+                    return
+                except Exception as e:
+                    st.error(f"AI 深掘りエラー: {e}")
+                    return
+
+            mindmap_json = st.session_state["mindmap_json"]
+            existing_ids = {c["id"] for c in mindmap_json["root"]["children"]}
+            deduped = [c for c in new_children if c.get("id") not in existing_ids]
+            mindmap_json["root"]["children"].extend(deduped)
+            try:
+                r2 = httpx.post(
+                    f"{MINDMAP_BASE}/to-mermaid",
+                    json={"mindmap": mindmap_json},
+                    timeout=10,
+                )
+                r2.raise_for_status()
+                st.session_state["mindmap_json"] = mindmap_json
+                st.session_state["mindmap_mermaid"] = r2.json()["mermaid"]
+            except Exception as e:
+                st.error(f"再変換エラー: {e}")
+                return
+            st.rerun()
+
+        if save_clicked:
+            from datetime import date as _date
+            today_str = _date.today().isoformat()
+            file_path = f"saved/{code}_{today_str}.mmd"
+            try:
+                r = httpx.post(
+                    f"{MINDMAP_BASE}/save",
+                    json={"mindmap": st.session_state["mindmap_json"], "file_path": file_path},
+                    timeout=10,
+                )
+                r.raise_for_status()
+                st.success(f"保存しました: {file_path}")
+            except httpx.ConnectError:
+                st.error("mindmap API (port 8003) に接続できません。")
+            except Exception as e:
+                st.error(f"保存エラー: {e}")
+
+        with st.expander("軸別スコア詳細"):
+            result = st.session_state.get("mindmap_result", {})
+            axes_detail = [
+                ("technical", "テクニカル"),
+                ("fundamental", "ファンダ"),
+                ("foreign_flow", "外国人フロー"),
+                ("growth", "成長"),
+                ("growth_sector", "成長分野"),
+                ("moat_pp", "PP"),
+                ("policy", "政策"),
+            ]
+            for ax, label in axes_detail:
+                val = result.get(f"axis_{ax}")
+                expl = result.get("explanation", {}).get(ax, "")
+                val_str = f"{val:.1f}" if val is not None else "N/A"
+                st.write(f"**{label}**: {val_str} — {expl}")
+    else:
+        st.info("銘柄コードを入力して「マップ生成」をクリックしてください。")
+
+
 def main():
     if "view" not in st.session_state:
         st.session_state["view"] = "list"
@@ -4889,7 +5145,7 @@ def main():
 
     _show_policy_freshness_indicator()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
         [
             "ポートフォリオ",
             "波形分類",
@@ -4898,6 +5154,8 @@ def main():
             "投資スタイル最適化",
             "Moat Score",
             "ランキング",
+            "結論マップ",
+            "資産バリュー",
         ]
     )
 
@@ -4921,6 +5179,12 @@ def main():
 
     with tab7:
         _tab_moat_ranking()
+
+    with tab8:
+        _tab_mindmap_conclusion()
+
+    with tab9:
+        _tab_asset_value()
 
 
 if __name__ == "__main__":
